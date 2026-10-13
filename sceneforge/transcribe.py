@@ -49,6 +49,9 @@ def load_model(model_size="small"):
 
 def transcribe(audio_path, cache_dir, model_size="small", language="en", duration=None, progress=None):
     """Return list of words: [{"w": " word", "s": start, "e": end, "p": probability}]."""
+    test_words = os.environ.get("SCENEFORGE_TEST_TRANSCRIPT")  # automated tests only
+    if test_words:
+        return json.loads(Path(test_words).read_text(encoding="utf-8"))
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     lang = None if language in (None, "", "auto") else language

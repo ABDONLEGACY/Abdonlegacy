@@ -15,7 +15,6 @@ import os
 import subprocess
 import threading
 import time
-from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -382,7 +381,15 @@ class Renderer:
         tmp = out.with_name(out.stem + ".part.mp4")
         ff.run(["-i", str(video), "-i", str(audio_out), "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
                 "-movflags", "+faststart", str(tmp)], desc="Adding audio to video")
-        tmp.replace(out)
+        try:
+            tmp.replace(out)
+        except PermissionError:
+            # The old video is open in a player (Windows locks it): save next to it under a new name.
+            n = 2
+            while out.with_name(f"{out.stem} ({n}).mp4").exists():
+                n += 1
+            out = out.with_name(f"{out.stem} ({n}).mp4")
+            tmp.replace(out)
         self.progress(1.0, f"Finished in {fmt_time(time.time() - t0)}")
         return out
 

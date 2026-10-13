@@ -211,6 +211,66 @@ def test_preview():
     assert abs(d - (e1 - e0) / 30) < 0.1
 
 
+def test_variants_portrait_loop_slides_captions():
+    p = make_project("Portrait", preset="POV Finance", aspect="9:16")
+    st = p.settings
+    st["clips"].update(fit_mode="loop", keep_audio=True, clip_volume=0.5)
+    st["captions"].update(mode="phrase", position="middle")
+    st["transitions"].update(mode="rotate", types=["slide_left", "slide_right"])
+    p.save()
+    W, H = 360, 640
+    r = Renderer(p, quality="fast", size=(W, H), tag="test")
+    assert set(r.tl.types) <= {"slide_left", "slide_right"}
+    assert all(a != b for a, b in zip(r.tl.types, r.tl.types[1:]))
+    out = r.run()
+    frames = frames_of(out, W, H)
+    assert len(frames) == round(p.data["audio_duration"] * 30)
+    # scene 4 clip (2.5 s) is far shorter than its scene: looped part must keep moving (not frozen)
+    k = r.tl.numbers.index(4)
+    f0 = r.tl.B[k] + 100
+    diffs = [np.abs(frames[i].astype(int) - frames[i + 1]).mean() for i in range(f0, f0 + 20)]
+    # (a 24 fps clip shown at 30 fps repeats every 4th frame - that's normal; a frozen clip would be all ~0)
+    assert sum(d > 0.5 for d in diffs) >= 14, diffs
+    # clip sound (880 Hz tone) is in the mix during scene 4 only
+    from sceneforge import audio as A
+    pcm = ff.read_audio_f32(out, sr=A.SR, channels=1)[:, 0]
+
+    def tone(t0, t1):
+        seg = pcm[int(t0 * A.SR):int(t1 * A.SR)]
+        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        freqs = np.fft.rfftfreq(len(seg), 1 / A.SR)
+        return spec[(freqs > 870) & (freqs < 890)].max() / (spec.mean() + 1e-9)
+    s4 = r.tl.B[k] / 30
+    in4, in1 = tone(s4 + 0.5, s4 + 2.0), tone(1.0, 2.5)
+    print(f"  880 Hz clip tone strength: scene 4 {in4:.0f} vs scene 1 {in1:.0f}")
+    assert in4 > 10 * in1
+    # single-word captions & locked transition render too
+    st["captions"].update(mode="single")
+    st["transitions"].update(mode="lock", lock_type="zoom_out")
+    st["clips"].update(fit_mode="freeze")
+    p.save()
+    r2 = Renderer(p, quality="fast", size=(W, H), tag="test")
+    assert set(r2.tl.types) == {"zoom_out"}
+    r2.run()
+    shutil.copy(out, TMP / "portrait_test.mp4")
+
+
+def test_timeline_200_scenes():
+    from sceneforge.render import Timeline
+    p = make_project("Big")
+    dur = 1800.0
+    p.data["audio_duration"] = dur
+    p.data["scenes"] = [{"number": i + 1, "text": "x", "start": i * dur / 200 + (0.37 * (i % 3)) if i else 0.0,
+                         "media": p.scenes[i % 5]["media"]} for i in range(200)]
+    p.save()
+    t = Timeline(p, 1920, 1080)
+    assert len(t.pieces) == 399
+    total = sum(pc["f1"] - pc["f0"] for pc in t.pieces)
+    assert total == t.N == 54000, (total, t.N)
+    # pieces tile the timeline exactly, no gaps or overlaps
+    assert all(a["f1"] == b["f0"] for a, b in zip(t.pieces, t.pieces[1:]))
+
+
 if __name__ == "__main__":
     only = sys.argv[2:] if len(sys.argv) > 2 else None
     for name, fn in list(globals().items()):

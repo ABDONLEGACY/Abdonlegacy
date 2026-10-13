@@ -74,7 +74,6 @@ def fade(samples, fade_in_s, fade_out_s):
 def final_mix(voice_wav, fx_wav, out_path, duration, music=None, music_volume=0.15, duck=True):
     """voice (main) + effects/clip track + optional looped, ducked music -> AAC in .m4a."""
     args = ["-i", str(voice_wav)]
-    inputs = ["[0:a]"]
     if fx_wav:
         args += ["-i", str(fx_wav)]
     if music:
