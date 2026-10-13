@@ -33,22 +33,35 @@ browser opens SceneForge (the address is `http://127.0.0.1:7860`).
 
 ## 3. Make a video (5 steps)
 
-1. **Project**: type a name, choose 16:9 (YouTube) or 9:16 (Shorts), and pick your channel's style
-   preset. Or open an old project.
-2. **Script & Voice**
-   - Upload your voiceover (MP3, WAV or M4A). If it's in several files, upload them all at once.
-     They are joined in name order, so name them `part1`, `part2`, `part3` ...
-   - Upload the script (.docx, .txt or .md), or paste it in the box.
-   - Type how many scenes you expect. SceneForge warns you if the script has a different number.
-3. **Scene Sync**: press **Find scene starts**. SceneForge listens to your voiceover and finds where
-   each scene's first words are spoken. A 30-minute voiceover takes roughly 10-20 minutes with the
-   "small" model. Scenes it isn't sure about are marked **⚠** for you to check.
-4. **Media**: select all your images and clips at once, pick the whole folder, or paste the folder
-   path. SceneForge shows any scene that is still missing media. You can also add background music and
-   a transition sound (for example a whoosh) here.
-5. **Review & Export**: check the table. For any scene you can move its start time (−0.5 s / −0.1 s /
-   +0.1 s / +0.5 s, or type a time), swap its picture or clip, or play a quick preview. Then press
-   **Render video**. A progress bar shows the time left. When it's done, press **Open output folder**.
+The studio looks like this: your projects and presets in the dark menu on the left, and a 5-step bar at
+the top.
+
+0. **New Project** (blue button, top left): type a name, choose **Landscape 16:9** (YouTube) or
+   **Portrait 9:16** (Shorts), pick your channel style, then **Create & Open Project**.
+1. **Script & Voice**
+   - **Voice-Over Audio**: click the dashed box and choose your MP3, WAV or M4A. If the voice-over is
+     in several files, choose them all at once. They are joined in name order (`part1`, `part2` ...).
+   - **Script Document**: choose your .docx, .txt or .md file, or click *"or paste the script text
+     instead"*. **Download sample script** shows the right format.
+   - **Expected Scene Count**: type how many scenes you expect. If the script has a different number,
+     SceneForge stops and asks you first.
+   - Press **Sync Scenes**. SceneForge listens to your voice-over and finds where each scene's first
+     words are spoken. The scenes then appear on the right with their times. A 30-minute voice-over
+     takes roughly 10-20 minutes. Scenes it isn't sure about are marked **⚠**.
+2. **Scene Sync**: a table with every scene's start, end and length, and how well its words matched.
+   Nudge any start with −0.5 / −0.1 / +0.1 / +0.5, or type an exact time.
+3. **Media**: drop all your images and clips in the dashed box, pick a whole folder, or paste a folder
+   path. Each scene card shows its picture; red cards are still missing. Click a card to use a different
+   file for that scene. Add **Background music** and a **Transition sound** (for example a whoosh) here.
+4. **Sync & Review**: the full scene table with thumbnails and warnings. Press ▶ to watch a quick
+   preview of one scene, nudge starts, swap files, and change this project's **style** (captions,
+   motion, transitions, clip audio, music volume).
+5. **Export**: choose 1080p (or 4K, much slower) and the quality, then press **Render Video**. A progress
+   bar shows the time left. The finished video plays right there; **Open output folder** shows the MP4.
+   Rendering keeps going even if you close the browser tab.
+
+The **Projects** page lists all your projects. **Render History** lists every finished video, and
+**Presets** holds your channel styles.
 
 Every project is saved in its own folder in **Documents\SceneForge Projects** (inputs, settings,
 timings and the finished video). You can reopen it and render again at any time.
@@ -90,12 +103,12 @@ Accepted types: **PNG, JPG, WEBP** pictures and **MP4, MOV** clips.
 ## 6. Presets (your channel styles)
 
 There are three ready-made presets: **Documentary**, **Animated Explainer** and **POV Finance**. Open
-the **Presets** tab to change movement, transitions, captions (font, size, colours, position, style)
+**Presets** in the left menu and press **Edit** on a card to change movement, transitions, captions (font, size, colours, position, style)
 and audio. You can **Duplicate**, **Rename** or **Delete** presets there. Presets are saved in
 `settings\presets.json` inside the SceneForge folder.
 
 A project keeps its own copy of the settings. To change one project without changing the preset, use
-**"This project's settings"** in step 5.
+**Project style** in step 4.
 
 ## 7. Fixing common problems
 
@@ -103,12 +116,12 @@ A project keeps its own copy of the settings. To change one project without chan
 |---|---|
 | Nothing happens when I double-click SceneForge.bat | Open the SceneForge folder and double-click `Start_SceneForge.bat`. If it says "not installed", run `Install_SceneForge.bat` again. |
 | The installer stopped with a red "INSTALL PROBLEM" | Check your internet and run `Install_SceneForge.bat` again; it continues where it stopped. A log is saved in `install_log.txt`. |
-| The browser shows "can't connect" | The black SceneForge window must stay open. Start it again from the Desktop. |
-| A scene is marked ⚠ (flagged) | SceneForge couldn't confidently find that scene's first words, so it estimated the start. Pick the scene in step 5, press **Preview**, and nudge it until it's right. Usually the script and voiceover differ there (a sentence was changed while recording). |
+| The browser shows "can't connect" | The black SceneForge window must stay open. Start it again from the Desktop. Your work is saved. |
+| A scene is marked ⚠ (flagged) | SceneForge couldn't confidently find that scene's first words, so it estimated the start. In step 4, press ▶ on that scene to preview it, then nudge it until it's right. Usually the script and voiceover differ there (a sentence was changed while recording). |
 | "Less than half the script matched" | The script probably isn't the one used for this voiceover, or the wrong language is selected in step 3. |
-| A scene starts a little too early or late | Nudge it in step 5. To cut every scene slightly before its first word, use **"Cut this many seconds BEFORE each scene's first word"** in the settings. |
+| A scene starts a little too early or late | Nudge it in step 2 or 4. To cut every scene slightly before its first word, use **"Cut this many seconds BEFORE each scene's first word"** in the settings. |
 | Rendering stopped (laptop went to sleep, window closed, Stop pressed) | Press **Render video** again. It continues where it left off, and finished parts are reused. |
-| Scenes are missing media | Check the file names have the right scene numbers (see section 5). |
+| Scenes are missing media | Check the file names have the right scene numbers (see section 5), or click the red card in step 3 and choose the file. |
 | My laptop is slow | Use 1080p and quality "Standard" or "Fast". 4K takes about 4 times longer. Close other programs while rendering. A 30-minute video at 1080p takes very roughly 40-90 minutes on a laptop like the HP EliteBook 840 G5. |
 | Disk is getting full | In step 5, press **Delete temporary render files** after you're happy with the video. |
 | Something else went wrong | The error is shown in a red pop-up and in the black window. Close SceneForge and start it again. Your projects are saved after every step. |

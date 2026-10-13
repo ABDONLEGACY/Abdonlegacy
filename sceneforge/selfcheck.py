@@ -17,7 +17,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         print(f"  PROBLEM: {e}")
         return 1
-    for mod in ("gradio", "faster_whisper", "cv2", "numpy", "PIL", "rapidfuzz", "docx"):
+    for mod in ("fastapi", "uvicorn", "multipart", "faster_whisper", "cv2", "numpy", "PIL", "rapidfuzz", "docx"):
         try:
             __import__(mod)
         except Exception as e:  # noqa: BLE001

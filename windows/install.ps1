@@ -75,7 +75,7 @@ if (-not (Test-Path "$env:WINDIR\System32\msvcp140.dll") -or -not (Test-Path "$e
 }
 
 # ---------------------------------------------------------------- 3. Python packages
-Step "3/6  Python packages (Gradio, faster-whisper, OpenCV ...) - this can take a few minutes"
+Step "3/6  Python packages (faster-whisper, OpenCV, web server ...) - this can take a few minutes"
 & $Py -m pip install --upgrade --no-warn-script-location --disable-pip-version-check -r (Join-Path $App "requirements.txt")
 if ($LASTEXITCODE -ne 0) { Fail "Installing Python packages failed (see messages above)." }
 

@@ -1,15 +1,17 @@
-"""Stage 6: click through the whole app in a real (headless) browser, like a user would.
+"""Stage 6: click through the whole studio in a real (headless) browser, like a user would.
 
 Needs: pip install playwright (Chromium). The voiceover transcript is replaced by the sample's prepared
-transcript (SCENEFORGE_TEST_TRANSCRIPT), because the speech model is not downloaded in the test machine.
+transcript (SCENEFORGE_TEST_TRANSCRIPT), because the speech model is not downloaded on the test machine.
 
 usage: python tests/test_ui.py SAMPLE_FOLDER
 """
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import expect, sync_playwright
@@ -26,129 +28,140 @@ def start_app():
     SHOTS.mkdir(parents=True)
     env = dict(os.environ, SCENEFORGE_PROJECTS=str(TMP / "projects"),
                SCENEFORGE_TEST_TRANSCRIPT=str(SAMPLE / "fake_transcript.json"))
-    code = ("import sys, app; app.free_port = lambda preferred=7860: %d; sys.argv.append('--no-browser'); app.main()"
-            % PORT)
+    code = "import sys, app; app.free_port = lambda preferred=7860: %d; sys.argv.append('--no-browser'); app.main()" % PORT
     proc = subprocess.Popen([sys.executable, "-c", code], cwd=str(ROOT), env=env,
                             stdout=open(TMP / "app.log", "w"), stderr=subprocess.STDOUT)
     for _ in range(60):
-        time.sleep(1)
+        time.sleep(0.5)
         try:
-            import urllib.request
-            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=2)
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/meta", timeout=2)
             return proc
         except Exception:
             continue
     raise RuntimeError("app did not start: " + (TMP / "app.log").read_text())
 
 
+def shot(page, name, full=False):
+    page.screenshot(path=str(SHOTS / f"{name}.png"), full_page=full)
+
+
 def main():
     proc = start_app()
+    errors = []
     try:
         with sync_playwright() as pw:
             exe = os.environ.get("SF_CHROMIUM", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
             browser = pw.chromium.launch(executable_path=exe if Path(exe).exists() else None)
-            page = browser.new_page(viewport={"width": 1400, "height": 1000})
+            page = browser.new_page(viewport={"width": 1500, "height": 950})
+            page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(f"http://127.0.0.1:{PORT}/")
-            page.wait_for_selector("#new-name textarea, #new-name input")
+            expect(page.get_by_text("Welcome to SceneForge")).to_be_visible()
+            shot(page, "0_welcome")
 
-            # 1. new project
-            page.locator("#new-name textarea, #new-name input").first.fill("UI Test Video")
-            page.get_by_role("button", name="Create project").click()
-            expect(page.get_by_text("Project: UI Test Video")).to_be_visible(timeout=15000)
-            page.screenshot(path=str(SHOTS / "1_project.png"))
-            print("step 1 ok")
+            # New project modal
+            page.locator("#side-new").click()
+            expect(page.get_by_text("Create New Project")).to_be_visible()
+            page.locator("#np-name").fill("Why Ancient Temples Have No Windows")
+            page.locator("#np-tpl .tpl").nth(1).click()
+            shot(page, "1_new_project")
+            page.get_by_role("button", name="Create & Open Project").click()
+            expect(page.locator("#title-input")).to_have_value("Why Ancient Temples Have No Windows")
+            expect(page.get_by_text("Your mapped scenes will appear here")).to_be_visible()
+            shot(page, "2_step1_empty")
+            print("project created ok")
 
-            # 2. voice (two parts, picked in the 'wrong' order) + script file
-            page.get_by_role("tab", name="2. Script & Voice").click()
-            page.locator("#voice-files input[type=file]").set_input_files(
-                [str(SAMPLE / "voice_part2.wav"), str(SAMPLE / "voice_part1.wav")])
-            time.sleep(2)
-            page.get_by_role("button", name="Save voiceover").click()
-            expect(page.locator("#voice-info")).to_contain_text("Voiceover saved", timeout=30000)
-            txt = page.locator("#voice-info").inner_text()
-            assert txt.index("voice_part1") < txt.index("voice_part2"), txt
-            page.locator("#script-file input[type=file]").set_input_files(str(SAMPLE / "script.docx"))
-            time.sleep(3)
-            page.locator("#expected input").fill("6")
-            page.get_by_role("button", name="Save script & continue").click()
-            expect(page.locator("#script-info")).to_contain_text("expected 6 scenes", timeout=15000)
-            print("scene-count warning shown ok")
-            page.locator("#expected input").fill("5")
-            page.get_by_role("button", name="Save script & continue").click()
-            expect(page.locator("#script-info")).to_contain_text("Saved 5 scenes", timeout=15000)
-            page.screenshot(path=str(SHOTS / "2_script_voice.png"), full_page=True)
-            print("step 2 ok")
+            # Step 1: voice (two parts picked in the 'wrong' order) + script
+            page.locator("#voice-drop input").set_input_files([str(SAMPLE / "voice_part2.wav"), str(SAMPLE / "voice_part1.wav")])
+            expect(page.locator("#voice-box .fileitem").first).to_contain_text("voice_part1", timeout=30000)
+            page.locator("#script-drop input").set_input_files(str(SAMPLE / "script.docx"))
+            expect(page.locator("#script-box")).to_contain_text("5 scenes found", timeout=15000)
+            page.locator("#expected").fill("6")
+            page.locator("#sync-btn").click()
+            expect(page.get_by_text("Scene count doesn't match")).to_be_visible(timeout=10000)
+            shot(page, "3_count_warning")
+            page.get_by_role("button", name="Go back").click()
+            page.locator("#expected").fill("5")
+            page.locator("#sync-btn").click()
+            expect(page.get_by_text("Mapped scenes")).to_be_visible(timeout=60000)
+            expect(page.locator("#right-pane .scene-item")).to_have_count(5, timeout=10000)
+            shot(page, "4_step1_synced")
+            print("sync ok")
 
-            # 3. sync
-            page.get_by_role("tab", name="3. Scene Sync").click()
-            page.get_by_role("button", name="Find scene starts").click()
-            expect(page.locator("#sync-info")).to_contain_text("Synced", timeout=60000)
-            expect(page.locator("#sync-info")).to_contain_text("All scenes were found confidently")
-            page.screenshot(path=str(SHOTS / "3_sync.png"), full_page=True)
-            print("step 3 ok")
-
-            # 4. media
-            page.get_by_role("tab", name="4. Media").click()
+            # Step 2 table, then media
+            page.locator(".stepper .step").nth(1).click()
+            expect(page.get_by_text("All 5 scenes were found confidently")).to_be_visible()
+            shot(page, "5_step2")
+            page.get_by_role("button", name="Continue to Media").click()
             files = sorted(str(p) for p in (SAMPLE / "media").iterdir())
-            page.locator("#media-files input[type=file]").set_input_files(files)
-            time.sleep(3)
-            page.get_by_role("button", name="Add media", exact=True).click()
-            expect(page.locator("#media-info")).to_contain_text("5 of 5 scenes have media", timeout=30000)
-            page.locator("#music-file input[type=file]").set_input_files(str(SAMPLE / "music.mp3"))
-            time.sleep(2)
-            page.get_by_role("button", name="Use this music").click()
-            expect(page.locator("#media-info")).to_contain_text("Background music: music.mp3", timeout=15000)
-            page.locator("#sfx-file input[type=file]").set_input_files(str(SAMPLE / "whoosh.wav"))
-            time.sleep(2)
-            page.get_by_role("button", name="Use this sound").click()
-            expect(page.locator("#media-info")).to_contain_text("Transition sound: sfx.wav", timeout=15000)
-            page.screenshot(path=str(SHOTS / "4_media.png"), full_page=True)
-            print("step 4 ok")
+            page.locator("#media-drop input").set_input_files(files)
+            expect(page.locator("#m-count")).to_contain_text("all 5 scenes have media", timeout=30000)
+            page.locator("#music-drop input").set_input_files(str(SAMPLE / "music.mp3"))
+            expect(page.locator("#x-music")).to_contain_text("music.mp3", timeout=15000)
+            page.locator("#sfx-drop input").set_input_files(str(SAMPLE / "whoosh.wav"))
+            expect(page.locator("#x-sfx")).to_contain_text("sfx.wav", timeout=15000)
+            page.wait_for_timeout(800)
+            shot(page, "6_media")
+            print("media ok")
 
-            # 5. review, nudge, preview, render
-            page.get_by_role("button", name="Continue to Review & Export").click()
-            expect(page.locator("#review table")).to_be_visible(timeout=20000)
-            assert page.locator("#review tbody tr").count() == 5
-            assert page.locator("#review img").count() == 5
-            page.screenshot(path=str(SHOTS / "5_review.png"), full_page=True)
-            # pick scene 3, nudge +0.1
-            page.get_by_label("Scene", exact=True).click()
-            page.get_by_role("option", name="Scene 3").click()
-            expect(page.locator("#scene-info")).to_contain_text("Scene 3", timeout=10000)
-            before = page.locator("#scene-info").inner_text()
-            page.get_by_role("button", name="+0.1 s").click()
-            page.wait_for_timeout(2500)
-            after = page.locator("#scene-info").inner_text()
-            assert before != after, (before, after)
-            print("nudge ok:", after.splitlines()[0])
-            page.get_by_role("button", name="▶ Preview this scene").click()
-            expect(page.locator("#prev-video video")).to_be_visible(timeout=120000)
-            print("preview ok")
-            page.get_by_role("button", name="🎬 Render video").click()
-            expect(page.locator("#render-msg")).to_contain_text("Finished", timeout=600000)
-            expect(page.locator("#out-video video")).to_be_visible(timeout=20000)
-            page.screenshot(path=str(SHOTS / "6_rendered.png"), full_page=True)
-            print("render ok:", page.locator("#render-msg").inner_text().strip().splitlines()[-1])
+            # Step 4 review: nudge, style, preview
+            page.get_by_role("button", name="Continue to Review").click()
+            expect(page.locator("table.t tbody tr")).to_have_count(5, timeout=15000)
+            row3 = page.locator("table.t tbody tr").nth(2)
+            before = row3.locator("td").nth(2).inner_text()
+            row3.locator("button[data-d='0.1']").click()
+            page.wait_for_timeout(1000)
+            after = page.locator("table.t tbody tr").nth(2).locator("td").nth(2).inner_text()
+            assert before.split()[0] != after.split()[0], (before, after)
+            assert "moved by you" in page.locator("table.t tbody tr").nth(2).inner_text()
+            page.locator("#proj-form .sf-f[data-k='mode'] .chip[data-v='phrase']").click()
+            page.locator("#pf-save").click()
+            expect(page.get_by_text("Project style saved.")).to_be_visible()
+            shot(page, "7_review")
+            page.locator("button[data-prev='4']").click()
+            expect(page.locator(".overlay video")).to_be_visible(timeout=120000)
+            shot(page, "8_preview")
+            page.keyboard.press("Escape")
+            print("review + preview ok")
 
-            # presets: duplicate + rename
-            page.get_by_role("tab", name="Presets").click()
-            page.get_by_label("New name (for Duplicate / Rename)").fill("My Shorts Style")
-            page.get_by_role("button", name="Duplicate").click()
-            page.wait_for_timeout(2000)
-            import json
+            # Step 5 export
+            page.get_by_role("button", name="Continue to Export").click()
+            page.locator("#render-btn").click()
+            expect(page.locator("#out-box video")).to_be_visible(timeout=600000)
+            shot(page, "9_export")
+            print("render ok")
+
+            # Presets: duplicate, rename, edit, delete
+            page.goto(f"http://127.0.0.1:{PORT}/#/presets")
+            expect(page.locator(".pcard")).to_have_count(3)
+            page.locator(".pcard").first.get_by_role("button", name="Duplicate").click()
+            page.locator("#nm").fill("My Shorts Style")
+            page.locator("#nm-ok").click()
+            expect(page.locator(".pcard")).to_have_count(4)
+            card = page.locator(".pcard", has_text="My Shorts Style")
+            card.get_by_role("button", name="Rename").click()
+            page.locator("#nm").fill("My Shorts")
+            page.locator("#nm-ok").click()
+            card = page.locator(".pcard", has_text="My Shorts")
+            expect(card).to_have_count(1)
+            card.get_by_role("button", name="Edit").click()
+            page.locator("#pe-ar .choice[data-v='9:16']").click()
+            shot(page, "10_preset_edit")
+            page.locator("#pe-save").click()
+            expect(page.locator(".filters")).to_contain_text("Portrait 9:16 (1)")
             presets = json.loads((ROOT / "settings" / "presets.json").read_text())
-            assert "My Shorts Style" in presets, list(presets)
-            page.get_by_label("New name (for Duplicate / Rename)").fill("My Shorts")
-            page.get_by_role("button", name="Rename").click()
-            page.wait_for_timeout(2000)
-            presets = json.loads((ROOT / "settings" / "presets.json").read_text())
-            assert "My Shorts" in presets and "My Shorts Style" not in presets, list(presets)
-            page.get_by_role("button", name="Delete").click()
-            page.wait_for_timeout(2000)
-            presets = json.loads((ROOT / "settings" / "presets.json").read_text())
-            assert "My Shorts" not in presets
-            page.screenshot(path=str(SHOTS / "7_presets.png"), full_page=True)
+            assert presets["My Shorts"]["aspect"] == "9:16"
+            shot(page, "11_presets")
+            page.locator(".pcard", has_text="My Shorts").locator("[data-a='del']").click()
+            page.locator("#cf-ok").click()
+            expect(page.locator(".pcard")).to_have_count(3)
             print("presets ok")
+
+            page.goto(f"http://127.0.0.1:{PORT}/#/projects")
+            expect(page.locator(".pcard")).to_have_count(1)
+            shot(page, "12_projects")
+            page.goto(f"http://127.0.0.1:{PORT}/#/history")
+            expect(page.locator("#h-body tr")).to_have_count(1)
+            shot(page, "13_history")
             browser.close()
     finally:
         proc.terminate()
@@ -157,9 +170,8 @@ def main():
     if "Traceback" in log:
         print(log[-3000:])
         raise SystemExit("errors in app log")
-    out = list((TMP / "projects" / "UI Test Video" / "output").glob("*.mp4"))
-    print("output:", out)
-    assert out
+    if errors:
+        raise SystemExit(f"JavaScript errors: {errors}")
     print("UI TEST PASSED")
 
 
