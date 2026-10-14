@@ -154,6 +154,7 @@ Screen and sleep → "Never" while plugged in). Long renders keep the CPU busy, 
 python tests/make_sample.py sample          # builds a 5-scene sample with generated voice
 python tests/test_sync.py sample
 python tests/test_render.py sample
+python tests/test_transcribe.py
 python tests/test_ui.py sample              # needs: pip install playwright
 python -m sceneforge.selfcheck
 ```

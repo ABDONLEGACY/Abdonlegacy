@@ -47,6 +47,12 @@ def load_model(model_size="small"):
                         download_root=str(paths.MODELS_DIR))
 
 
+def load_audio_16k(path):
+    """Audio file -> float32 numpy array, mono, 16 kHz."""
+    from . import ffmpeg_utils as ff
+    return ff.read_audio_f32(path, sr=16000, channels=1)[:, 0]
+
+
 def transcribe(audio_path, cache_dir, model_size="small", language="en", duration=None, progress=None):
     """Return list of words: [{"w": " word", "s": start, "e": end, "p": probability}]."""
     test_words = os.environ.get("SCENEFORGE_TEST_TRANSCRIPT")  # automated tests only
@@ -63,8 +69,12 @@ def transcribe(audio_path, cache_dir, model_size="small", language="en", duratio
     if progress:
         progress(0.0, f"Loading speech model '{model_size}' ...")
     model = load_model(model_size)
+    # Decode the audio ourselves with FFmpeg (16 kHz mono, what Whisper expects) instead of letting
+    # faster-whisper open the file with PyAV: some PyAV versions reject faster-whisper's options
+    # ("open() got an unexpected keyword argument 'metadata_errors'").
+    audio = load_audio_16k(audio_path)
     segments, info = model.transcribe(
-        str(audio_path),
+        audio,
         language=lang,
         beam_size=5,
         temperature=0.0,                  # no random fallback sampling -> deterministic
