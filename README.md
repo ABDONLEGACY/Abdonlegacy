@@ -23,6 +23,12 @@ nothing you put in it is uploaded anywhere.
      folder, and nothing else on your computer changes.
 4. When it says **"SceneForge is installed!"**, you will find **`SceneForge.bat` on your Desktop**.
 
+## Updating to a new version
+
+Close the SceneForge window, then double-click **`Update_SceneForge.bat`** in the SceneForge folder.
+It downloads the newest program files and replaces only those. Your projects, presets, Python, FFmpeg
+and speech model are kept.
+
 ## 2. Start it
 
 Double-click **SceneForge.bat** on your Desktop. A black window opens, and a few seconds later your
