@@ -30,8 +30,8 @@ class Track:
     def __init__(self, path, seconds):
         self.path = Path(path)
         self.n = int(round(seconds * SR)) + SR
+        # a new memory-mapped file starts out as zeros; it lives on disk, not in RAM
         self.data = np.lib.format.open_memmap(str(self.path), mode="w+", dtype=np.float32, shape=(self.n, 2))
-        self.data[:] = 0.0
 
     def add(self, start_s, samples, gain=1.0):
         i0 = int(round(start_s * SR))
@@ -47,7 +47,10 @@ class Track:
     def to_wav(self, out_path, seconds):
         n = int(round(seconds * SR))
         raw = self.path.with_suffix(".raw")
-        np.clip(self.data[:n], -1.0, 1.0).astype("<f4").tofile(raw)
+        with open(raw, "wb") as fh:  # in 1-minute slices, so a long video never needs the whole track in RAM
+            step = SR * 60
+            for i in range(0, n, step):
+                np.clip(self.data[i:min(n, i + step)], -1.0, 1.0).astype("<f4").tofile(fh)
         ff.run(["-f", "f32le", "-ar", SR, "-ac", 2, "-i", str(raw), "-c:a", "pcm_s16le", str(out_path)],
                desc="Writing effects track")
         raw.unlink(missing_ok=True)

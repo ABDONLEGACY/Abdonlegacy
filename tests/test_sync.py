@@ -82,6 +82,43 @@ def test_flags_unfindable_scene():
     assert 0 < s[1]["start"] <= 2.5
 
 
+def test_first_word_heard_as_two_pieces():
+    """'distant' heard as 'dis' + 'tant': the scene must start at 'dis', not half-way through the word."""
+    scenes = [{"number": 1, "text": "lost final sword road"}, {"number": 2, "text": "distant shadow broken"}]
+    words = [("lost", 0.0), ("final", 0.4), ("sword", 0.8), ("road", 1.2), ("dis", 2.0), ("tant", 2.17),
+             ("shadow", 2.4), ("broken", 2.8)]
+    tw = [{"w": " " + w, "s": t, "e": t + 0.15} for w, t in words]
+    r = align.sync(scenes, tw, 4.0)
+    assert r["scenes"][1]["start"] == 2.0, r["scenes"][1]
+
+
+def test_many_scenes_need_confirm_not_error():
+    from sceneforge import pipeline
+    text = "\n".join(f"Scene {i}: hello {i}" for i in range(1, 1601))
+    scenes, _ = pipeline.check_script(text)
+    assert len(scenes) == 1600
+    reasons = pipeline.confirm_reasons(scenes, 1600)
+    assert len(reasons) == 1 and "more than 1500" in reasons[0], reasons
+    assert pipeline.confirm_reasons(scenes[:1500], 1500) == []
+    assert len(pipeline.confirm_reasons(scenes[:1000], 999)) == 1  # count mismatch
+
+
+def test_800_short_scenes():
+    """A ~20-minute script with 800 scenes of 1-2 s, with typical recognition mistakes: every start exact."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import make_long_sample
+    out = Path("/tmp/claude-0/t_long800") if Path("/tmp/claude-0").exists() else Path(__import__("tempfile").mkdtemp())
+    make_long_sample.build(out, 800, media=False)
+    truth = json.loads((out / "truth.json").read_text())
+    scenes, _ = script_parser.parse_scenes((out / "script.txt").read_text())
+    t0 = time.time()
+    r = align.sync(scenes, json.loads((out / "fake_transcript.json").read_text()), truth["duration"])
+    errs = [abs(a["start"] - b) for a, b in zip(r["scenes"], truth["scene_starts"])]
+    flagged = sum(1 for a in r["scenes"] if a["flag"])
+    print(f"  800 scenes aligned in {time.time() - t0:.2f}s, worst error {max(errs):.3f}s, flagged {flagged}")
+    assert len(scenes) == 800 and max(errs) < 0.02 and flagged == 0
+
+
 def test_long_video_performance():
     """200 scenes, ~30 minutes of speech (~4,500 words) with 8 % transcription errors."""
     rng = random.Random(1)

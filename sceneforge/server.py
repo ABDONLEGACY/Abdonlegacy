@@ -280,10 +280,10 @@ def save_script(folder: str, body: ScriptBody):
     scenes, warnings = pipeline.check_script(body.text, body.expected or None)
     if not scenes:
         raise UserError(warnings[0] if warnings else "No scenes found in the script.")
-    mismatch = bool(body.expected) and len(scenes) != int(body.expected)
-    if not body.save or (mismatch and not body.confirm):
-        return {"saved": False, "needs_confirm": mismatch, "count": len(scenes), "warnings": warnings,
-                "scenes": [{"number": s["number"], "text": s["text"]} for s in scenes]}
+    reasons = pipeline.confirm_reasons(scenes, body.expected or None)
+    if not body.save or (reasons and not body.confirm):
+        return {"saved": False, "needs_confirm": bool(reasons), "reasons": reasons, "count": len(scenes),
+                "warnings": warnings, "scenes": [{"number": s["number"], "text": s["text"]} for s in scenes]}
     if p.data.get("script_text") == body.text and p.scenes and p.data.get("expected_scenes") == body.expected:
         return {"saved": True, "unchanged": True, "count": len(scenes), "warnings": warnings, "project": state(p)}
     pipeline.save_script(p, body.text, body.expected or None)

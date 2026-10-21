@@ -15,6 +15,7 @@ import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -29,7 +30,8 @@ from .transitions import blend, plan_transitions
 
 FPS = 30
 QUALITY = {"fast": ("superfast", 21), "standard": ("veryfast", 19), "high": ("medium", 17)}
-RENDER_VERSION = 1  # bump to invalidate all cached pieces after an engine change
+RENDER_VERSION = 2
+CHUNK_FRAMES = 300  # neighbouring pieces are encoded together in ~10 s chunks (fewer encoder start-ups)  # bump to invalidate all cached pieces after an engine change
 
 
 class Stopped(Exception):
@@ -180,9 +182,6 @@ class Renderer:
             d["next"] = self.tl.scene_desc(k + 1)
         return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 
-    def piece_path(self, i, pc):
-        return self.piece_dir / f"{i:05d}_{pc['kind']}.mp4"
-
     def _encoder(self, out_path):
         preset, crf = QUALITY.get(self.quality, QUALITY["standard"])
         args = ["-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.W}x{self.H}", "-r", str(self.fps), "-i", "-",
@@ -208,21 +207,40 @@ class Renderer:
             q = (i + 0.5) / total
             yield f0 + i, blend(pc["type"], A, Bf, q)
 
-    def render_piece(self, pc, out_path, on_frame=None):
+    def chunks(self, pieces):
+        """Group consecutive pieces into ~10 s chunks. Each chunk is one encoded file that can be reused."""
+        out, cur, frames = [], [], 0
+        for i, pc in pieces:
+            cur.append((i, pc))
+            frames += pc["f1"] - pc["f0"]
+            if frames >= CHUNK_FRAMES:
+                out.append(cur)
+                cur, frames = [], 0
+        if cur:
+            out.append(cur)
+        return out
+
+    def chunk_path(self, members):
+        first, last = members[0][0], members[-1][0]
+        return self.piece_dir / f"{first:05d}-{last:05d}.mp4"
+
+    def render_chunk(self, members, out_path, on_frame=None):
         tmp = out_path.with_name(out_path.stem + ".part.mp4")
         proc = self._encoder(tmp)
         count = 0
+        expected = sum(pc["f1"] - pc["f0"] for _, pc in members)
         try:
-            for gidx, fr in self._frames_for(pc):
-                if STOP.is_set():
-                    raise Stopped()
-                if not fr.flags.writeable or not fr.flags.c_contiguous:
-                    fr = np.array(fr)
-                self.captions.draw(fr, gidx)
-                proc.stdin.write(memoryview(fr))
-                count += 1
-                if on_frame:
-                    on_frame()
+            for _, pc in members:
+                for gidx, fr in self._frames_for(pc):
+                    if STOP.is_set():
+                        raise Stopped()
+                    if not fr.flags.writeable or not fr.flags.c_contiguous:
+                        fr = np.array(fr)
+                    self.captions.draw(fr, gidx)
+                    proc.stdin.write(memoryview(fr))
+                    count += 1
+                    if on_frame:
+                        on_frame()
             proc.stdin.close()
         except (BrokenPipeError, OSError):
             proc.wait()
@@ -239,24 +257,26 @@ class Renderer:
         rc = proc.wait()
         if rc != 0:
             raise ff.FFmpegError("Video encoder failed: " + proc.stderr.read().decode("utf-8", "replace")[-1500:])
-        expected = pc["f1"] - pc["f0"]
         if count != expected:
-            raise RuntimeError(f"Piece {out_path.name}: produced {count} frames, expected {expected}")
+            raise RuntimeError(f"Part {out_path.name}: produced {count} frames, expected {expected}")
         tmp.replace(out_path)
 
     def render_video(self, pieces=None, w_start=0.0, w_span=1.0):
-        """Render (or reuse) all pieces, then join them. Returns path of the silent video."""
-        pieces = list(enumerate(self.tl.pieces)) if pieces is None else pieces
-        todo, total_frames = [], 0
-        for i, pc in pieces:
-            out = self.piece_path(i, pc)
-            sig = self.piece_sig(pc)
+        """Render (or reuse) all chunks of pieces, then join them. Returns path of the silent video."""
+        full = pieces is None
+        pieces = list(enumerate(self.tl.pieces)) if full else pieces
+        chunks = self.chunks(pieces)
+        todo, total_frames, keep = [], 0, set()
+        for members in chunks:
+            out = self.chunk_path(members)
+            sig = hashlib.sha1("|".join(self.piece_sig(pc) for _, pc in members).encode()).hexdigest()
             sig_file = out.with_suffix(".json")
+            keep.update((out.name, sig_file.name))
             done = out.exists() and sig_file.exists() and sig_file.read_text() == sig
             if not done:
-                todo.append((i, pc, out, sig, sig_file))
-                total_frames += pc["f1"] - pc["f0"]
-        reused = len(pieces) - len(todo)
+                todo.append((members, out, sig, sig_file))
+                total_frames += sum(pc["f1"] - pc["f0"] for _, pc in members)
+        reused = len(chunks) - len(todo)
         t_start = time.time()
         state = {"done": 0, "last": 0.0}
 
@@ -271,30 +291,35 @@ class Renderer:
             eta = el / max(1e-6, frac) - el if state["done"] > 15 else None
             msg = f"Rendering frames {state['done']}/{total_frames}"
             if reused:
-                msg += f" ({reused} finished pieces reused)"
+                msg += f" ({reused} finished parts reused)"
             if eta is not None:
                 msg += f" - about {fmt_time(eta)} left"
             self.progress(w_start + w_span * 0.95 * frac, msg)
 
-        self.progress(w_start, f"Rendering {len(todo)} of {len(pieces)} pieces ({reused} already done)")
+        self.progress(w_start, f"Rendering {len(todo)} of {len(chunks)} parts ({reused} already done)")
         try:
-            for i, pc, out, sig, sig_file in todo:
+            for members, out, sig, sig_file in todo:
                 sig_file.unlink(missing_ok=True)
-                self.render_piece(pc, out, on_frame)
+                self.render_chunk(members, out, on_frame)
                 sig_file.write_text(sig)
         finally:
             self.close()
+        if full:
+            # a full render: remove leftover parts from older timings so they don't fill the disk
+            for f in self.piece_dir.iterdir():
+                if f.name not in keep and not f.name.endswith(".part.mp4"):
+                    f.unlink(missing_ok=True)
         # join
-        self.progress(w_start + w_span * 0.96, "Joining pieces ...")
+        self.progress(w_start + w_span * 0.96, "Joining parts ...")
         listing = self.dir / ("pieces_%d.txt" % os.getpid())
         lines = []
-        for i, pc in pieces:
-            rel = self.piece_path(i, pc).resolve().as_posix().replace("'", "'\\''")
+        for members in chunks:
+            rel = self.chunk_path(members).resolve().as_posix().replace("'", "'\\''")
             lines.append(f"file '{rel}'")
         listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
         video = self.dir / "video_only.mp4"
         ff.run(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", "-movflags", "+faststart",
-                str(video)], desc="Joining video pieces")
+                str(video)], desc="Joining video parts")
         listing.unlink(missing_ok=True)
         return video
 
@@ -366,13 +391,40 @@ class Renderer:
                            duck=bool(st["audio"].get("duck", True)))
         return out_path
 
+    def audio_sig(self, t0, t1):
+        """Hash of everything the mixed audio depends on, so an unchanged mix is reused (big projects)."""
+        p, st = self.p, self.p.settings
+
+        def fstat(path):
+            if not path or not Path(path).exists():
+                return None
+            s_ = Path(path).stat()
+            return [str(path), s_.st_size, int(s_.st_mtime)]
+        clips = []
+        if st["clips"].get("keep_audio"):
+            for k, (path, kind) in enumerate(self.tl.media):
+                if kind == "video":
+                    clips.append([k, fstat(path), self.tl.ext[k]])
+        d = {"v": RENDER_VERSION, "range": [round(t0, 4), round(t1, 4)], "voice": fstat(p.work_dir / "voice.wav"),
+             "music": fstat(p.path(p.data.get("music"))), "sfx": fstat(p.path(p.data.get("sfx"))),
+             "audio": st["audio"], "clips_cfg": st["clips"], "clips": clips, "fps": self.fps,
+             "whoosh": [[self.tl.B[k + 1], h] for k, h in enumerate(self.tl.h) if h > 0] if p.data.get("sfx") else []}
+        return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
+
     # ---- top level ---------------------------------------------------------------
     def run(self):
         STOP.clear()
         t0 = time.time()
-        self.progress(0.0, "Preparing audio ...")
         audio_out = self.dir / "audio.m4a"
-        self.build_audio(0.0, self.tl.N / self.fps, audio_out)
+        sig = self.audio_sig(0.0, self.tl.N / self.fps)
+        sig_file = audio_out.with_suffix(".json")
+        if audio_out.exists() and sig_file.exists() and sig_file.read_text() == sig:
+            self.progress(0.0, "Audio unchanged - reusing it")
+        else:
+            self.progress(0.0, "Preparing audio (voice, clip sounds, music) ...")
+            sig_file.unlink(missing_ok=True)
+            self.build_audio(0.0, self.tl.N / self.fps, audio_out)
+            sig_file.write_text(sig)
         video = self.render_video(w_start=0.04, w_span=0.92)
         self.progress(0.97, "Adding sound ...")
         name = self.p.data["name"]

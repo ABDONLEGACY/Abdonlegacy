@@ -255,11 +255,24 @@ def sync(scenes, twords, audio_duration, lead_in=0.0):
                     res["start"] = ttoks[tj]["s"]
                     res["method"] = "exact" if match[first][1] == 1.0 else "fuzzy"
                 else:
-                    # The first words may have been mis-heard. If there are unmatched transcript words just
-                    # before the first matched one, they are almost certainly those words: use their start.
-                    back = tj
-                    while back - 1 > prev_t_idx and (back - 1) not in matched_t and tj - (back - 1) <= d:
-                        back -= 1
+                    # The first words may have been mis-heard (or heard as several pieces: "distant" ->
+                    # "dis tant"). Look at the unmatched transcript words just before the first matched one
+                    # and pick the run that sounds most like the missing script words.
+                    missing = "".join(stoks[i]["key"] for i in range(a, first))
+                    best_k, best_sim, k = tj, 0.0, tj
+                    while k - 1 > prev_t_idx and (k - 1) not in matched_t and tj - (k - 1) <= d + 3:
+                        k -= 1
+                        heard = "".join(ttoks[j]["key"] for j in range(k, tj))
+                        sim = _similar(missing, heard)
+                        if sim > best_sim + 1e-9:
+                            best_k, best_sim = k, sim
+                    if best_sim >= 0.5:
+                        back = best_k
+                    else:
+                        # nothing sounds alike: assume the d unmatched words right before are the missing ones
+                        back = tj
+                        while back - 1 > prev_t_idx and (back - 1) not in matched_t and tj - (back - 1) <= d:
+                            back -= 1
                     res["start"] = ttoks[back]["s"]
                     res["method"] = "recovered" if back < tj else "later word"
                 if res["confidence"] < 0.6:

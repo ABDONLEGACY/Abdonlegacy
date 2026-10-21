@@ -236,7 +236,7 @@ function step1(body) {
         <span class="hintbox">Label scenes "Scene 1:", "Scene 2:" ... <a href="/api/sample-script">${icon("download")} Download sample script</a></span></div>
       <div id="script-box"></div>
       <div class="field-title">${icon("list")} Expected Scene Count</div>
-      <input class="input" id="expected" type="number" min="1" max="400" placeholder="e.g. 5" value="${p.expected ?? ""}">
+      <input class="input" id="expected" type="number" min="1" max="10000" placeholder="e.g. 5" value="${p.expected ?? ""}">
       <div class="help">So SceneForge can warn you if the script has a different number of scenes.</div>
       <details class="adv"><summary>Speech recognition options</summary>
         <div class="row">
@@ -349,10 +349,11 @@ async function saveScript(confirmed = false) {
   if (!text.trim()) throw new Error("Upload or paste the script first.");
   const r = await api("POST", `/api/projects/${encodeURIComponent(p.folder)}/script`, { text, expected: exp, confirm: confirmed });
   if (!r.saved && r.needs_confirm) {
-    const go = await confirmDialog("Scene count doesn't match",
-      `<p>You expected <b>${exp}</b> scenes, but the script has <b>${r.count}</b>.</p>
-       ${r.warnings.filter((w) => !w.startsWith("You expected")).length ? `<ul>${r.warnings.filter((w) => !w.startsWith("You expected")).map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-       <p class="help">Check the "Scene N:" labels in your script. Continue only if the script is right.</p>`);
+    const other = r.warnings.filter((w) => !w.startsWith("You expected"));
+    const go = await confirmDialog(r.reasons.length > 1 ? "Please check the script" : (exp && r.count !== exp ? "Scene count doesn't match" : "A lot of scenes"),
+      `${r.reasons.map((w) => `<p>${esc(w)}</p>`).join("")}
+       ${other.length ? `<ul>${other.slice(0, 10).map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+       <p class="help">Continue only if the script is right.</p>`);
     if (!go) return false;
     return saveScript(true);
   }
@@ -411,13 +412,16 @@ function mappedPanel(p) {
       <div class="stat ${p.flagged.length ? "warn" : ""}"><b>${p.flagged.length}</b><span>need checking</span></div>
     </div>
     ${(p.sync.match_rate || 1) < 0.5 ? `<div class="notice warn" style="margin:12px 14px 0">${icon("alert")}<div>Less than half of the script matched the voice-over. Is this the right script, and is the language right?</div></div>` : ""}
-    <div class="scene-list"></div></div>`);
-  const list = $(".scene-list", panel);
-  p.scenes.forEach((s) => {
-    list.appendChild(el(`<div class="scene-item ${s.flag ? "flag" : ""}"><div class="badge">${s.number}</div>
+    <div class="mp-bar"></div><div class="scene-list"></div></div>`);
+  const draw = () => {
+    const info = pageOf("mapped");
+    $(".mp-bar", panel).replaceChildren(pageBar("mapped", info, draw, ["all", "flagged"]));
+    $(".scene-list", panel).innerHTML = info.items.map((s) => `<div class="scene-item ${s.flag ? "flag" : ""}" data-row="${s.number}"><div class="badge">${s.number}</div>
       <div style="min-width:0"><div class="tx">${esc(s.text)}</div>${s.flag ? `<div class="flagtxt">⚠ ${esc(s.flag)}</div>` : ""}</div>
-      <div class="tm">${fmtT(s.start)} → ${fmtT(s.end)}<br>${(s.duration || 0).toFixed(2)} s</div></div>`));
-  });
+      <div class="tm">${fmtT(s.start)} → ${fmtT(s.end)}<br>${(s.duration || 0).toFixed(2)} s</div></div>`).join("");
+    focusRow(panel, "mapped");
+  };
+  draw();
   $("#mp-next", panel).onclick = () => go(p.flagged.length ? 2 : 3);
   return panel;
 }
@@ -452,6 +456,61 @@ function updateJobViews(j) {
   }
 }
 
+// ---- long scene lists: filters + pages of 100, so 1000+ scenes stay fast -----------------------
+const PAGE_SIZE = 100;
+const FILTERS = {
+  all: ["All scenes", () => true],
+  flagged: ["Need checking", (s) => !!s.flag],
+  missing: ["Missing media", (s) => !s.media],
+  edited: ["Moved by you", (s) => !!s.edited],
+};
+S.view = {};
+function viewState(key) { return S.view[key] || (S.view[key] = { filter: "all", page: 0, focus: null }); }
+function pageOf(key) {
+  const st = viewState(key);
+  const fn = (FILTERS[st.filter] || FILTERS.all)[1];
+  const list = S.project.scenes.filter(fn);
+  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  st.page = Math.max(0, Math.min(st.page, pages - 1));
+  return { st, list, pages, items: list.slice(st.page * PAGE_SIZE, (st.page + 1) * PAGE_SIZE) };
+}
+function pageBar(key, info, rerender, filterKeys = ["all", "flagged", "edited"]) {
+  const { st, list, pages } = info;
+  const scenes = S.project.scenes;
+  const chips = filterKeys.map((k) => {
+    const n = k === "all" ? scenes.length : scenes.filter(FILTERS[k][1]).length;
+    if (k !== "all" && !n && st.filter !== k) return "";
+    return `<button class="chip ${st.filter === k ? "on" : ""}" data-f="${k}">${FILTERS[k][0]} (${n})</button>`;
+  }).join("");
+  const from = list.length ? st.page * PAGE_SIZE + 1 : 0, to = Math.min(list.length, (st.page + 1) * PAGE_SIZE);
+  const bar = el(`<div class="pagebar"><div class="chips">${chips}</div><span class="spacer" style="flex:1"></span>
+    <label class="help" style="margin:0;display:flex;align-items:center;gap:6px">Go to scene <input type="number" min="1" class="goto" placeholder="#"></label>
+    ${pages > 1 ? `<button class="btn xs" data-pg="-1" ${st.page === 0 ? "disabled" : ""}>‹ Prev</button>
+      <span class="help" style="margin:0;white-space:nowrap">${from}–${to} of ${list.length}</span>
+      <button class="btn xs" data-pg="1" ${st.page >= pages - 1 ? "disabled" : ""}>Next ›</button>` : `<span class="help" style="margin:0">${list.length} shown</span>`}</div>`);
+  $$("[data-f]", bar).forEach((b) => (b.onclick = () => { st.filter = b.dataset.f; st.page = 0; rerender(); }));
+  $$("[data-pg]", bar).forEach((b) => (b.onclick = () => { st.page += parseInt(b.dataset.pg, 10); rerender(); }));
+  const gi = $(".goto", bar);
+  gi.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    const n = parseInt(gi.value, 10);
+    let idx = list.findIndex((x) => x.number === n);
+    if (idx < 0) { st.filter = "all"; idx = scenes.findIndex((x) => x.number === n); }
+    if (idx < 0) return toast(`There is no scene ${n}.`, "err");
+    st.page = Math.floor(idx / PAGE_SIZE);
+    st.focus = n;
+    rerender();
+  };
+  return bar;
+}
+function focusRow(root, key) {
+  const st = viewState(key);
+  if (!st.focus) return;
+  const row = $(`[data-row="${st.focus}"]`, root);
+  st.focus = null;
+  if (row) { row.scrollIntoView({ block: "center" }); row.classList.add("focus"); setTimeout(() => row.classList.remove("focus"), 1800); }
+}
+
 // ---- step 2: scene sync table -----------------------------------------------------------------
 function step2(body) {
   const p = S.project;
@@ -464,7 +523,7 @@ function step2(body) {
       <span class="help" style="margin:0 0 0 8px">Measured from your voice-over. Each scene starts on its first spoken word.</span><span class="spacer"></span>
       <button class="btn sm" id="resync">${icon("refresh")} Sync again</button>
       <button class="btn sm primary" id="s2-next">Continue to Media ${icon("arrow-r")}</button></div>
-    <div id="s2-notice" style="padding:12px 16px 0"></div>
+    <div id="s2-notice" style="padding:12px 16px 0"></div><div class="s2-bar"></div>
     <div class="table-wrap"><table class="t"><thead><tr><th>Scene</th><th>Start</th><th>End</th><th>Length</th><th>Narration</th><th>Match</th><th>Status</th><th>Adjust start</th></tr></thead><tbody></tbody></table></div></div>`);
   body.appendChild(card);
   $("#resync", card).onclick = () => go(1);
@@ -504,14 +563,17 @@ function fillSyncTable(card) {
   $("#s2-notice", card).innerHTML = p.flagged.length
     ? `<div class="notice warn">${icon("alert")}<div><b>${p.flagged.length} scene(s) need checking:</b> ${p.flagged.slice(0, 40).join(", ")}. Their opening words could not be confidently found, so the start was estimated. Preview them in step 4 and nudge them if needed.</div></div>`
     : `<div class="notice ok">${icon("check")}<div>All ${p.scenes.length} scenes were found confidently in the voice-over.</div></div>`;
+  const info = pageOf("sync");
+  $(".s2-bar", card).replaceChildren(pageBar("sync", info, () => fillSyncTable(card)));
   const tb = $("tbody", card);
-  tb.innerHTML = p.scenes.map((s) => `<tr class="${s.flag ? "flag" : ""}"><td><div class="badge">${s.number}</div></td>
+  tb.innerHTML = info.items.map((s) => `<tr class="${s.flag ? "flag" : ""}" data-row="${s.number}"><td><div class="badge">${s.number}</div></td>
     <td class="num">${fmtT(s.start)}</td><td class="num">${fmtT(s.end)}</td><td class="num">${(s.duration || 0).toFixed(2)} s</td>
     <td class="words">${esc(s.text.split(/\s+/).slice(0, 14).join(" "))}${s.text.split(/\s+/).length > 14 ? " ..." : ""}</td>
     <td class="num">${s.confidence !== null && s.confidence !== undefined ? Math.round(s.confidence * 100) + "%" : "–"}</td>
     <td>${statusCell(s)}</td><td>${nudgeControls(s)}</td></tr>`).join("");
-  fillIcons(card);
-  wireNudges(card, () => fillSyncTable(card));
+  fillIcons(tb);
+  wireNudges(tb, () => fillSyncTable(card));
+  focusRow(tb, "sync");
 }
 
 // ---- step 3: media ------------------------------------------------------------------------------
@@ -552,7 +614,7 @@ function step3(body) {
   });
   const grid = el(`<div class="panel" style="margin-top:20px"><div class="panel-h"><h3>Scenes</h3><span id="m-count" class="help" style="margin:0"></span><span class="spacer"></span>
     <button class="btn sm primary" id="s3-next">Continue to Review ${icon("arrow-r")}</button></div>
-    <div class="media-grid ${portrait ? "portrait" : ""}" id="m-grid"></div></div>`);
+    <div id="m-bar"></div><div class="media-grid ${portrait ? "portrait" : ""}" id="m-grid"></div></div>`);
   body.appendChild(grid);
   $("#s3-next", grid).onclick = () => go(4);
   renderMediaGrid();
@@ -566,10 +628,12 @@ function renderMediaGrid() {
   const portrait = p.aspect === "9:16";
   $("#m-count").innerHTML = p.missing.length ? `<span class="pill-s red">${p.missing.length} missing</span> &nbsp;${p.scenes.length - p.missing.length} of ${p.scenes.length} scenes have media`
     : `<span class="pill-s green">${icon("check")} all ${p.scenes.length} scenes have media</span>`;
+  const info = pageOf("media");
+  $("#m-bar").replaceChildren(pageBar("media", info, renderMediaGrid, ["all", "missing"]));
   g.innerHTML = "";
-  p.scenes.forEach((s) => {
-    const c = el(`<div class="mcard ${portrait ? "portrait" : ""} ${s.media ? "" : "miss"}" title="Click to choose a different file for scene ${s.number}">
-      <div class="img" style="${s.media ? `background-image:url('${thumbUrl(s)}')` : ""}">${s.media ? "" : "MISSING"}</div>
+  info.items.forEach((s) => {
+    const c = el(`<div class="mcard ${portrait ? "portrait" : ""} ${s.media ? "" : "miss"}" data-row="${s.number}" title="Click to choose a different file for scene ${s.number}">
+      <div class="img">${s.media ? `<img loading="lazy" src="${thumbUrl(s)}" alt="">` : "MISSING"}</div>
       ${s.media ? `<span class="pill-s ${s.media_kind === "video" ? "purple" : ""} kind">${s.media_kind === "video" ? "clip" : "image"}</span>` : ""}
       <div class="cap"><b>Scene ${s.number}</b><span>${esc(s.media || "click to add")}</span></div>
       <input type="file" class="hidden" accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.m4v"></div>`);
@@ -579,6 +643,7 @@ function renderMediaGrid() {
     g.appendChild(c);
   });
   fillIcons(g);
+  focusRow(g, "media");
 }
 
 async function swapMedia(number, file, after) {
@@ -597,15 +662,24 @@ async function uploadMedia(files) {
   const z = $("#media-drop");
   if (z) $(".t", z).textContent = `Copying ${ok.length} file(s) ...`;
   await guard(async () => {
-    // send in batches so very large folders don't time out
-    let last = null;
-    for (let i = 0; i < ok.length; i += 20) {
+    // Send in batches (at most 25 files or ~250 MB each) so a folder of 1000+ files or big clips never
+    // overloads one request. Each batch is matched to scenes as soon as it arrives.
+    const batches = [];
+    let cur = [], size = 0;
+    ok.forEach((f) => {
+      if (cur.length && (cur.length >= 25 || size + f.size > 250e6)) { batches.push(cur); cur = []; size = 0; }
+      cur.push(f); size += f.size;
+    });
+    if (cur.length) batches.push(cur);
+    let last = null, done = 0;
+    for (const b of batches) {
       const fd = new FormData();
-      ok.slice(i, i + 20).forEach((f) => fd.append("files", f, f.name));
+      b.forEach((f) => fd.append("files", f, f.name));
       const r = await api("POST", `/api/projects/${encodeURIComponent(S.project.folder)}/media`, fd);
       if (last) { r.unmatched = last.unmatched.concat(r.unmatched); r.notes = last.notes.concat(r.notes); r.added += last.added; }
       last = r;
-      if (z) $(".t", z).textContent = `Copying ... ${Math.min(i + 20, ok.length)} / ${ok.length}`;
+      done += b.length;
+      if (z) $(".t", z).textContent = `Copying ... ${done} / ${ok.length}`;
     }
     afterMedia(last);
   });
@@ -616,8 +690,8 @@ function afterMedia(r) {
   S.project = r.project;
   const notes = $("#m-notes");
   let html = "";
-  if (r.unmatched.length) html += `<div class="notice warn" style="margin-top:14px">${icon("alert")}<div>No scene number in these file names, so they were not used: ${r.unmatched.slice(0, 20).map(esc).join(", ")}</div></div>`;
-  if (r.notes.length) html += `<div class="notice info" style="margin-top:14px">${icon("info")}<div>${r.notes.map(esc).join("<br>")}</div></div>`;
+  if (r.unmatched.length) html += `<div class="notice warn" style="margin-top:14px">${icon("alert")}<div>No scene number in these file names, so they were not used: ${r.unmatched.slice(0, 20).map(esc).join(", ")}${r.unmatched.length > 20 ? ` ... and ${r.unmatched.length - 20} more` : ""}</div></div>`;
+  if (r.notes.length) html += `<div class="notice info" style="margin-top:14px">${icon("info")}<div>${r.notes.slice(0, 20).map(esc).join("<br>")}${r.notes.length > 20 ? `<br>... and ${r.notes.length - 20} more` : ""}</div></div>`;
   if (notes) notes.innerHTML = html;
   toast(`Added ${r.added} file(s).`, "ok");
   renderMediaGrid();
@@ -660,7 +734,7 @@ function step4(body) {
   const wrap = el(`<div style="display:flex;flex-direction:column;gap:20px"></div>`);
   const panel = el(`<div class="panel"><div class="panel-h"><h3>${icon("play")} Review scenes</h3><span class="spacer"></span>
     <button class="btn sm primary" id="s4-next">Continue to Export ${icon("arrow-r")}</button></div>
-    <div id="s4-notice" style="padding:12px 16px 0"></div>
+    <div id="s4-notice" style="padding:12px 16px 0"></div><div class="s4-bar"></div>
     <div class="table-wrap"><table class="t"><thead><tr><th>Scene</th><th>Media</th><th>Start</th><th>End</th><th>Length</th><th>First words</th><th>Status</th><th>Adjust start</th><th>Preview</th></tr></thead><tbody></tbody></table></div></div>`);
   wrap.appendChild(panel);
   const side = el(`<div class="card"><div class="card-h" style="padding:20px 24px 14px;display:flex;align-items:center;gap:12px"><div><h2 style="font-size:17px">${icon("settings")} Project style</h2>
@@ -698,7 +772,10 @@ function fillReview(panel) {
   if (p.flagged.length) parts.push(`<div class="notice warn">${icon("alert")}<div><b>Check these scenes:</b> ${p.flagged.slice(0, 40).join(", ")}. Press ▶ to preview, then nudge the start if needed.</div></div>`);
   if (p.missing.length) parts.push(`<div class="notice err">${icon("image")}<div><b>Missing media:</b> scenes ${p.missing.slice(0, 40).join(", ")}. They will show a dark "media missing" card.</div></div>`);
   n.innerHTML = parts.join("");
-  $("tbody", panel).innerHTML = p.scenes.map((s) => `<tr class="${s.flag ? "flag" : ""}">
+  const info = pageOf("review");
+  $(".s4-bar", panel).replaceChildren(pageBar("review", info, () => fillReview(panel), ["all", "flagged", "missing", "edited"]));
+  const tb = $("tbody", panel);
+  tb.innerHTML = info.items.map((s) => `<tr class="${s.flag ? "flag" : ""}" data-row="${s.number}">
     <td><div class="badge">${s.number}</div></td>
     <td>${s.media ? `<img class="thumb ${portrait ? "portrait" : ""}" loading="lazy" src="${thumbUrl(s)}" alt="">` : `<div class="thumb missing ${portrait ? "portrait" : ""}">missing</div>`}
       <label class="linkish" style="font-size:12px;cursor:pointer">${s.media ? "swap" : "add"}<input type="file" class="hidden" data-swap="${s.number}" accept=".png,.jpg,.jpeg,.webp,.mp4,.mov,.m4v"></label></td>
@@ -707,8 +784,9 @@ function fillReview(panel) {
     <td class="words">${esc(s.text.split(/\s+/).slice(0, 16).join(" "))} ...</td>
     <td>${statusCell(s)}</td><td>${nudgeControls(s)}</td>
     <td><button class="btn sm" data-prev="${s.number}" title="Preview this scene">${icon("play-s")}</button></td></tr>`).join("");
-  fillIcons(panel);
-  wireNudges(panel, () => fillReview(panel));
+  fillIcons(tb);
+  wireNudges(tb, () => fillReview(panel));
+  focusRow(tb, "review");
   $$("input[data-swap]", panel).forEach((inp) => (inp.onchange = () => {
     if (inp.files.length) swapMedia(parseInt(inp.dataset.swap, 10), inp.files[0], () => fillReview(panel));
   }));

@@ -27,6 +27,22 @@ def save_voice(project: Project, files):
     return dur
 
 
+# Above this many scenes SceneForge asks you to confirm (a mislabelled script often looks like this),
+# but you can always continue. There is no hard limit.
+SCENE_WARN_LIMIT = 1500
+
+
+def confirm_reasons(scenes, expected=None):
+    """Things the user must click past before the script is saved."""
+    reasons = []
+    if expected and scenes and len(scenes) != int(expected):
+        reasons.append(f"You expected {int(expected)} scenes but the script has {len(scenes)}.")
+    if len(scenes) > SCENE_WARN_LIMIT:
+        reasons.append(f"The script has {len(scenes)} scenes - more than {SCENE_WARN_LIMIT}. That's fine for videos "
+                       "with very short scenes; otherwise check the \"Scene N:\" labels.")
+    return reasons
+
+
 def check_script(text, expected=None):
     scenes, warnings = script_parser.parse_scenes(text or "")
     if expected and scenes and len(scenes) != int(expected):
@@ -38,8 +54,6 @@ def save_script(project: Project, text, expected=None):
     scenes, warnings = check_script(text, expected)
     if not scenes:
         raise ValueError(warnings[0] if warnings else "No scenes found in the script.")
-    if len(scenes) > 400:
-        raise ValueError("More than 400 scenes found - is the script labelled correctly?")
     (project.dir / "inputs").mkdir(exist_ok=True)
     (project.dir / "inputs" / "script.txt").write_text(text, encoding="utf-8")
     project.set_script(text, scenes, int(expected) if expected else None)

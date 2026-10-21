@@ -72,6 +72,18 @@ The **Projects** page lists all your projects. **Render History** lists every fi
 Every project is saved in its own folder in **Documents\SceneForge Projects** (inputs, settings,
 timings and the finished video). You can reopen it and render again at any time.
 
+## Big projects (hundreds or thousands of short scenes)
+
+SceneForge has no fixed limit on scenes, video length or number of media files. It has been tested with
+an 800-scene, 20-minute project (scenes of 1-2 seconds) and 800 uploaded images and clips.
+
+- **More than 1500 scenes:** SceneForge asks you to confirm, because a wrongly labelled script can look
+  like this. If your script is right, press **Continue anyway**.
+- **Long lists** (mapped scenes, Scene Sync, Media, Review) show 100 scenes per page. Use **Next ›**,
+  the filters (*Need checking*, *Missing media*, *Moved by you*) or type a number in **Go to scene**.
+- **Uploading hundreds of files:** pick them all at once or pick the folder. They are sent in small
+  batches, and the counter shows progress. For very large clip folders, pasting the folder path is fastest.
+
 ## 4. How to write the script
 
 Start every scene with a label like `Scene 1:` at the beginning of a line:
@@ -162,5 +174,7 @@ python tests/test_sync.py sample
 python tests/test_render.py sample
 python tests/test_transcribe.py
 python tests/test_ui.py sample              # needs: pip install playwright
+python tests/make_long_sample.py long 800    # 800-scene, ~20-minute project
+python tests/test_ui_long.py long
 python -m sceneforge.selfcheck
 ```
