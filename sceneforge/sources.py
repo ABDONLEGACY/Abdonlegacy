@@ -65,7 +65,8 @@ class ImageSource:
         self.bw, self.bh = bw, bh
         self.unit_w, self.unit_h = W * zb, H * zb  # size of the full frame (zoom 1.0) in base pixels
 
-    def frame(self, k):
+    def _camera(self, k):
+        """Camera for local frame k: (x0, y0, sx, sy, zoom) such that base pixel = s * output pixel + x0."""
         p = k / (self.length - 1) if self.length > 1 else 0.0
         z, xo, yo = camera_at(self.plan, p)
         ww, wh = self.unit_w / z, self.unit_h / z
@@ -77,8 +78,20 @@ class ImageSource:
         sx, sy = ww / self.W, wh / self.H
         x0 = cx - ww / 2 + 0.5 * sx - 0.5
         y0 = cy - wh / 2 + 0.5 * sy - 0.5
+        return x0, y0, sx, sy, z
+
+    def frame(self, k):
+        x0, y0, sx, sy, _z = self._camera(k)
         M = np.array([[sx, 0, x0], [0, sy, y0]], dtype=np.float64)
         return warp_exact(self.base, M, self.W, self.H)
+
+    def project(self, k, fx, fy):
+        """Where the picture point (fx, fy) (fractions of the image) is in frame k, plus the camera zoom.
+        Uses exactly the same camera as frame(k), so overlays stay locked to the picture."""
+        x0, y0, sx, sy, z = self._camera(k)
+        X = (fx * self.bw - 0.5 - x0) / sx + 0.5
+        Y = (fy * self.bh - 0.5 - y0) / sy + 0.5
+        return X, Y, z
 
     def frames(self, a, b):
         for k in range(a, b):
@@ -214,6 +227,22 @@ class VideoSource:
                 c = 1.0 / z  # inverse map: output pixel -> source pixel
                 M = np.array([[c, 0, (self.W - 1) / 2 * (1 - c)], [0, c, (self.H - 1) / 2 * (1 - c)]])
                 yield warp_exact(last, M, self.W, self.H)
+
+    def project(self, k, fx, fy):
+        """Where the clip point (fx, fy) (fractions of the clip's picture) is in frame k."""
+        vw, vh = max(1, self.info["width"]), max(1, self.info["height"])
+        sc = max(self.W / vw, self.H / vh)
+        sw, sh = vw * sc, vh * sc
+        X = fx * sw - (sw - self.W) / 2
+        Y = fy * sh - (sh - self.H) / 2
+        z = 1.0
+        if k >= self.L and self.fit["fill"] != "loop":
+            extra = max(1, self.length - self.L)
+            p = (k - self.L + 1) / extra
+            z = 1.0 + 0.04 * (p * p * (3 - 2 * p))
+            X = (X - 0.5 - (self.W - 1) / 2) * z + (self.W - 1) / 2 + 0.5
+            Y = (Y - 0.5 - (self.H - 1) / 2) * z + (self.H - 1) / 2 + 0.5
+        return X, Y, z
 
     def close(self):
         self._last = None

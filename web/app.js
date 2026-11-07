@@ -40,6 +40,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   "arrow-r": '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  pin: '<path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/>',
   open: '<path d="M14 3h7v7M21 3l-9 9"/><path d="M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>',
 };
 function icon(name, cls = "") { return `<svg class="i ${cls}" viewBox="0 0 24 24">${ICONS[name] || ""}</svg>`; }
@@ -298,7 +299,7 @@ function renderScriptBox() {
   box.appendChild(dropzone("script-drop", info ? "Click or drop to replace the script" : "Click or tap to upload script", ".docx, .txt, or .md", ".docx,.txt,.md", false, uploadScript));
   if (info) {
     const it = el(`<div class="filelist"><div class="fileitem">${icon("file")}<span class="nm">${esc(S.draftName || "Script")}${info.saved ? "" : " (not saved yet)"}</span>
-      <span class="meta"><b>${info.count}</b> scenes found</span><button class="btn xs" id="edit-script">${icon("edit")} View / edit text</button></div></div>`);
+      <span class="meta"><b>${info.count}</b> scenes found${info.effects ? ` · <b>${info.effects}</b> effects` : ""}</span><button class="btn xs" id="edit-script">${icon("edit")} View / edit text</button></div></div>`);
     box.appendChild(it);
     (info.warnings || []).forEach((w) => box.appendChild(el(`<div class="notice warn" style="margin:8px 0 0">${icon("alert")}<div>${esc(w)}</div></div>`)));
   }
@@ -322,7 +323,7 @@ async function uploadScript(files) {
     fd.append("file", files[0], files[0].name);
     const r = await api("POST", "/api/script/read", fd);
     S.draft = r.text; S.draftName = files[0].name;
-    S.draftInfo = { count: r.count, warnings: r.warnings, saved: false };
+    S.draftInfo = { count: r.count, warnings: r.warnings, saved: false, effects: r.effects };
     const exp = $("#expected");
     const n = parseInt(exp.value, 10);
     if (n && n !== r.count) S.draftInfo.warnings = [`You expect ${n} scenes but this script has ${r.count}.`, ...r.warnings];
@@ -463,6 +464,7 @@ const FILTERS = {
   flagged: ["Need checking", (s) => !!s.flag],
   missing: ["Missing media", (s) => !s.media],
   edited: ["Moved by you", (s) => !!s.edited],
+  effects: ["Has effects", (s) => (s.effects || []).length > 0],
 };
 S.view = {};
 function viewState(key) { return S.view[key] || (S.view[key] = { filter: "all", page: 0, focus: null }); }
@@ -554,9 +556,10 @@ function wireNudges(root, after) {
   });
 }
 function statusCell(s) {
-  if (s.flag) return `<span class="flagtxt">⚠ ${esc(s.flag)}</span>`;
-  if (s.edited) return `<span class="pill-s purple">moved by you</span>`;
-  return `<span class="pill-s green">${icon("check")} found</span>`;
+  const fx = (s.effects || []).length ? ` <span class="pill-s purple" title="Scene effects">${icon("pin")} ${s.effects.length}</span>` : "";
+  if (s.flag) return `<span class="flagtxt">⚠ ${esc(s.flag)}</span>${fx}`;
+  if (s.edited) return `<span class="pill-s purple">moved by you</span>${fx}`;
+  return `<span class="pill-s green">${icon("check")} found</span>${fx}`;
 }
 function fillSyncTable(card) {
   const p = S.project;
@@ -771,9 +774,11 @@ function fillReview(panel) {
   const parts = [];
   if (p.flagged.length) parts.push(`<div class="notice warn">${icon("alert")}<div><b>Check these scenes:</b> ${p.flagged.slice(0, 40).join(", ")}. Press ▶ to preview, then nudge the start if needed.</div></div>`);
   if (p.missing.length) parts.push(`<div class="notice err">${icon("image")}<div><b>Missing media:</b> scenes ${p.missing.slice(0, 40).join(", ")}. They will show a dark "media missing" card.</div></div>`);
+  const unplaced = p.scenes.filter((s) => (s.effects || []).some((e) => !e.placed)).map((s) => s.number);
+  if (unplaced.length) parts.push(`<div class="notice info">${icon("pin")}<div><b>Scene effects to place:</b> scenes ${unplaced.slice(0, 40).join(", ")}. Press <b>Effects</b> on those rows to click where each pin lands and drag where each text sits (until then pins sit in the centre and text in the upper third).</div></div>`);
   n.innerHTML = parts.join("");
   const info = pageOf("review");
-  $(".s4-bar", panel).replaceChildren(pageBar("review", info, () => fillReview(panel), ["all", "flagged", "missing", "edited"]));
+  $(".s4-bar", panel).replaceChildren(pageBar("review", info, () => fillReview(panel), ["all", "flagged", "missing", "edited", "effects"]));
   const tb = $("tbody", panel);
   tb.innerHTML = info.items.map((s) => `<tr class="${s.flag ? "flag" : ""}" data-row="${s.number}">
     <td><div class="badge">${s.number}</div></td>
@@ -783,7 +788,8 @@ function fillReview(panel) {
     <td class="num">${fmtT(s.end)}</td><td class="num">${(s.duration || 0).toFixed(2)} s</td>
     <td class="words">${esc(s.text.split(/\s+/).slice(0, 16).join(" "))} ...</td>
     <td>${statusCell(s)}</td><td>${nudgeControls(s)}</td>
-    <td><button class="btn sm" data-prev="${s.number}" title="Preview this scene">${icon("play-s")}</button></td></tr>`).join("");
+    <td><div class="row-actions"><button class="btn sm" data-prev="${s.number}" title="Preview this scene">${icon("play-s")}</button>
+      ${(s.effects || []).length ? `<button class="btn sm fx-btn ${s.effects.some((e) => !e.placed) ? "todo" : ""}" data-fx="${s.number}" title="Place this scene's pins and text">${icon("pin")} Effects (${s.effects.length})</button>` : ""}</div></td></tr>`).join("");
   fillIcons(tb);
   wireNudges(tb, () => fillReview(panel));
   focusRow(tb, "review");
@@ -791,6 +797,99 @@ function fillReview(panel) {
     if (inp.files.length) swapMedia(parseInt(inp.dataset.swap, 10), inp.files[0], () => fillReview(panel));
   }));
   $$("button[data-prev]", panel).forEach((b) => (b.onclick = () => previewScene(parseInt(b.dataset.prev, 10))));
+  $$("button[data-fx]", panel).forEach((b) => (b.onclick = () => openEffects(parseInt(b.dataset.fx, 10), () => fillReview(panel))));
+}
+
+// ---- scene effects: place pins and text on the picture ---------------------------------------
+const PIN_SVG = `<svg viewBox="0 0 36 50" class="pin-svg"><path d="M18 49C18 49 34 30 34 17A16 16 0 1 0 2 17C2 30 18 49 18 49Z" fill="var(--pin)" stroke="rgba(0,0,0,.35)" stroke-width="1.5"/><circle cx="18" cy="17" r="6.5" fill="#fff"/></svg>`;
+
+function openEffects(number, after) {
+  const p = S.project;
+  const sc = p.scenes.find((x) => x.number === number);
+  if (!sc || !(sc.effects || []).length) return;
+  if (!sc.media) return toast("Add an image or clip for this scene first (step 3).", "err");
+  const fx = sc.effects.map((e) => ({ ...e }));
+  const style = (p.settings.effects || {});
+  let sel = fx.findIndex((e) => !e.placed);
+  if (sel < 0) sel = 0;
+  const name = (e, i) => {
+    const n = fx.slice(0, i + 1).filter((x) => x.type === e.type).length;
+    return e.type === "pin" ? `Pin ${n}${e.text ? `: ${e.text}` : ""}` : `Text: ${e.text}`;
+  };
+  const m = modal(`<div class="modal wide fx-modal"><div class="modal-h"><div class="mi">${icon("pin")}</div>
+      <div><h3>Scene ${number} effects</h3><p>Click on the picture to place the selected effect. Drag pins and text to move them.</p></div><button class="x" data-x>&times;</button></div>
+    <div class="modal-b fx-body">
+      <div class="fx-stage-wrap"><div class="fx-stage" style="--pin:${esc(style.pin_color || "#E53935")}">
+        <img class="fx-img" src="/api/projects/${encodeURIComponent(p.folder)}/scenes/${number}/still?v=${sc.media_v}" alt="" draggable="false">
+        <div class="fx-visible" title="Part of the picture shown in the video (the camera moves gently within it)"></div>
+      </div><div class="help">The bright frame shows the part of the picture that is in the video. Positions are saved as a percentage of the picture, so they work at any resolution and follow the zoom and pan.</div></div>
+      <div class="fx-list"></div>
+    </div>
+    <div class="modal-f"><button class="btn" id="fx-reset">${icon("refresh")} Default positions</button><span style="flex:1"></span>
+      <button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="fx-save">${icon("save")} Save positions</button></div></div>`);
+  const stage = $(".fx-stage", m), img = $(".fx-img", m), list = $(".fx-list", m);
+  const markers = fx.map((e, i) => {
+    const mk = e.type === "pin"
+      ? el(`<div class="fx-mark pin" title="${esc(name(e, i))}">${PIN_SVG}${e.text ? `<span class="fx-label">${esc(e.text)}</span>` : ""}</div>`)
+      : el(`<div class="fx-mark text" title="${esc(name(e, i))}" style="color:${esc(style.text_color || "#fff")}">${esc(e.text)}</div>`);
+    stage.appendChild(mk);
+    return mk;
+  });
+  const place = () => {
+    fx.forEach((e, i) => {
+      markers[i].style.left = (e.x * 100) + "%";
+      markers[i].style.top = (e.y * 100) + "%";
+      markers[i].classList.toggle("sel", i === sel);
+    });
+    list.innerHTML = `<div class="label-up">Effects in this scene</div>` + fx.map((e, i) => `<button class="fx-item ${i === sel ? "on" : ""}" data-i="${i}">
+      <span class="fx-ic">${icon(e.type === "pin" ? "pin" : "type")}</span><span><b>${esc(name(e, i))}</b>
+      <small>on the word "${esc(e.word)}"${e.t !== null && e.t !== undefined ? ` at ${fmtT(e.t)}` : " (sync first to see the time)"}${e.measured === false ? " ⚠ estimated" : ""}</small>
+      <small>${Math.round(e.x * 100)}% across, ${Math.round(e.y * 100)}% down</small></span></button>`).join("") +
+      `<div class="help" style="margin-top:12px">Pins land with their <b>tip</b> on the spot you click. Text is centred on its spot.</div>`;
+    fillIcons(list);
+    $$(".fx-item", list).forEach((b) => (b.onclick = () => { sel = parseInt(b.dataset.i, 10); place(); }));
+  };
+  const toFrac = (ev) => {
+    const r = img.getBoundingClientRect();
+    return { x: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)) };
+  };
+  const visible = () => {
+    // the area the video shows at the widest camera view: the picture cropped to fill the video frame
+    const A = p.aspect === "9:16" ? 9 / 16 : 16 / 9, a = img.naturalWidth / img.naturalHeight || A;
+    const v = $(".fx-visible", m);
+    const w = a > A ? A / a : 1, h = a > A ? 1 : a / A;
+    Object.assign(v.style, { left: ((1 - w) / 2 * 100) + "%", top: ((1 - h) / 2 * 100) + "%", width: (w * 100) + "%", height: (h * 100) + "%" });
+  };
+  img.onload = visible;
+  stage.addEventListener("pointerdown", (ev) => {
+    const mk = ev.target.closest(".fx-mark");
+    let i = mk ? markers.indexOf(mk) : sel;
+    if (i < 0) return;
+    sel = i;
+    ev.preventDefault();
+    const move = (e2) => { const f = toFrac(e2); fx[i].x = f.x; fx[i].y = f.y; place(); };
+    if (!mk) move(ev);  // click on the picture: put the selected effect there
+    stage.setPointerCapture(ev.pointerId);
+    stage.onpointermove = move;
+    stage.onpointerup = () => { stage.onpointermove = null; stage.onpointerup = null; };
+    place();
+  });
+  $("#fx-reset", m).onclick = () => {
+    let pins = 0, texts = 0;
+    fx.forEach((e) => {
+      if (e.type === "pin") { const k = pins++; const step = Math.floor((k + 1) / 2) * (k % 2 ? 1 : -1); e.x = Math.min(0.9, Math.max(0.1, 0.5 + 0.12 * step)); e.y = 0.5; }
+      else { e.x = 0.5; e.y = Math.min(0.3, 0.2 + 0.07 * texts++); }
+    });
+    place();
+  };
+  $("#fx-save", m).onclick = () => guard(async () => {
+    S.project = await api("PUT", `/api/projects/${encodeURIComponent(p.folder)}/scenes/${number}/effects`,
+      { positions: fx.map((e) => ({ x: e.x, y: e.y })) });
+    closeModal();
+    toast(`Scene ${number}: effect positions saved.`, "ok");
+    if (after) after();
+  });
+  place();
 }
 
 async function previewScene(number) {
@@ -939,6 +1038,18 @@ function schema() {
       { k: "clip_volume", t: "range", l: "Clip audio volume", min: 0, max: 1, step: 0.01 },
       { k: "keep_audio", t: "toggle", l: "Keep clip audio (sound effects under the voice)", wide: 1 },
     ] },
+    { sec: "effects", title: "Scene effects ([PIN] and [TEXT])", icon: "pin", fields: [
+      { k: "pin_color", t: "color", l: "Pin colour" },
+      { k: "pin_size", t: "range", l: "Pin size (px at 1080p)", min: 30, max: 220, step: 1 },
+      { k: "text_font", t: "select", l: "Text font", opts: Object.fromEntries(fonts.map((f) => [f, f])) },
+      { k: "text_size", t: "range", l: "Text size (px at 1080p)", min: 24, max: 240, step: 1 },
+      { k: "text_color", t: "color", l: "Text colour" },
+      { k: "text_outline_color", t: "color", l: "Text outline colour" },
+      { k: "text_outline", t: "range", l: "Text outline thickness", min: 0, max: 20, step: 1 },
+      { k: "label_size", t: "range", l: "Pin label size (px at 1080p)", min: 16, max: 120, step: 1 },
+      { k: "text_box", t: "toggle", l: "Background box behind text and labels" },
+      { k: "box_color", t: "color", l: "Box colour" },
+    ] },
     { sec: "audio", title: "Audio & sync", icon: "audio", fields: [
       { k: "music_volume", t: "range", l: "Music volume", min: 0, max: 1, step: 0.01, sec: "audio" },
       { k: "sfx_volume", t: "range", l: "Transition sound volume", min: 0, max: 1, step: 0.01, sec: "audio" },
@@ -1008,7 +1119,7 @@ function readSettingsForm(f, base) {
     else if (t === "many") v = $$(".chip.on", w).map((c) => c.dataset.v);
     else if (t === "select") v = $("select", w).value;
     else if (t === "color") v = $("input[type=text]", w).value.toUpperCase();
-    if (["size", "outline", "max_words"].includes(k)) v = Math.round(v);
+    if (["size", "outline", "max_words", "pin_size", "text_size", "text_outline", "label_size"].includes(k)) v = Math.round(v);
     st[s][k] = v;
   });
   const m = st.motion;
@@ -1228,8 +1339,50 @@ async function showSettings() {
           <b>Media:</b> the number in the file name is the scene: <code>Scene 1.png</code>, <code>scene_1.mp4</code>, <code>1.jpg</code> → scene 1.<br>
           <b>Voice-over in parts:</b> name them part1, part2 ... and pick them all at once.<br>
           <b>Flagged scenes (⚠):</b> preview them in step 4 and nudge the start if needed.<br>
-          <b>Render stopped?</b> Press Render again - it continues where it left off.</div></div>
-    </div>`;
+          <b>Render stopped?</b> Press Render again - it continues where it left off.<br>
+          <b>Scene effects:</b> put <code>[PIN]</code>, <code>[PIN: Rome]</code> or <code>[TEXT: 1940]</code> right before the word that should trigger it.</div></div>
+    </div>
+    <div class="card" style="margin-top:20px"><div class="card-h"><h2>${icon("pin")} Effect sounds</h2>
+      <p>One sound for every pin drop and one for every text pop, used in all projects. Each plays exactly on its word.</p></div>
+      <div class="card-b"><div class="extras" id="fx-sounds" style="margin-top:0"></div></div></div>`;
+  fillIcons(view);
+  renderEffectSounds();
+}
+
+async function renderEffectSounds() {
+  const box = $("#fx-sounds");
+  if (!box) return;
+  const st = await api("GET", "/api/effect-sounds").catch(() => null);
+  if (!st) return;
+  box.innerHTML = "";
+  [["pin", "Pin drop sound", "e.g. a soft thud or click"], ["text", "Text pop sound", "e.g. a short pop or swoosh"]].forEach(([kind, title, hint]) => {
+    const c = st[kind];
+    const col = el(`<div class="sound-card" data-kind="${kind}"><div class="field-title" style="margin-top:0">${icon(kind === "pin" ? "pin" : "type")} ${title}</div></div>`);
+    if (c.name) {
+      const it = el(`<div><div class="fileitem">${icon("audio")}<span class="nm">${esc(c.name)}</span>
+        <button class="btn xs" data-play>${icon("play-s")} Play</button><button class="btn xs danger" data-del>${icon("trash")} Remove</button></div>
+        <div class="sf-f" style="margin-top:12px"><label class="l">Volume</label><div class="rng"><input type="range" min="0" max="1.5" step="0.05" value="${c.volume}"><output>${Math.round(c.volume * 100)}%</output></div></div>
+        <audio preload="none" src="/api/effect-sounds/${kind}/file?v=${Date.now()}"></audio></div>`);
+      const rng = $("input[type=range]", it), out = $("output", it), au = $("audio", it);
+      rng.oninput = () => { out.textContent = Math.round(rng.value * 100) + "%"; au.volume = Math.min(1, rng.value); };
+      rng.onchange = () => guard(async () => { await api("PATCH", `/api/effect-sounds/${kind}`, { volume: parseFloat(rng.value) }); toast(`${title}: volume ${out.textContent}`, "ok"); });
+      $("[data-play]", it).onclick = () => { au.volume = Math.min(1, rng.value); au.currentTime = 0; au.play(); };
+      $("[data-del]", it).onclick = () => guard(async () => { await api("DELETE", `/api/effect-sounds/${kind}`); renderEffectSounds(); });
+      col.appendChild(it);
+    } else {
+      const z = dropzone(`snd-${kind}`, `Add a ${title.toLowerCase()}`, `${hint} - MP3, WAV, M4A`, ".mp3,.wav,.m4a,.aac,.flac,.ogg", false, (files) => guard(async () => {
+        const fd = new FormData();
+        fd.append("file", files[0], files[0].name);
+        await api("POST", `/api/effect-sounds/${kind}`, fd);
+        toast(`${title} saved.`, "ok");
+        renderEffectSounds();
+      }));
+      z.style.padding = "16px";
+      col.appendChild(z);
+    }
+    fillIcons(col);
+    box.appendChild(col);
+  });
 }
 
 // ----------------------------------------------------------------------------------------------- top bar

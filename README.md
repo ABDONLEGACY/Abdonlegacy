@@ -96,9 +96,55 @@ Inside, they discovered walls covered with strange golden symbols.
 ```
 
 - `Scene 1:`, `SCENE 1 -`, `**Scene 1:**` and `## Scene 1` all work.
-- Text in **[square brackets]** is treated as a note to yourself (for example `[show a map]`). It is
+- Text in **[square brackets]** (except the effect markers below) is treated as a note to yourself (for example `[show a map]`). It is
   not expected in the voiceover and is not shown in the captions.
 - Captions use **your script's spelling**, timed to your actual voice.
+
+## Scene effects: map pins and pop-up text
+
+Effects are animated pins and text drawn on top of a scene's picture. They appear at the exact moment a
+word is spoken, and only on the scenes where you add them.
+
+**1. Put a marker in the script, right before the word that should trigger it**
+
+```
+Scene 4: The legions marched from [PIN: Rome] Rome all the way to [PIN] Carthage.
+Scene 5: Everything changed in [TEXT: 1940] 1940 when the war reached the coast.
+```
+
+- `[PIN]` drops a map pin when the next word is spoken. It falls from above and lands on the word, with
+  a small bounce, a soft shadow and a ripple ring.
+- `[PIN: Rome]` does the same and shows the label "Rome" next to the pin.
+- `[TEXT: 1940]` pops up "1940" when the next word is spoken. It stays until the scene ends and fades
+  out with the transition.
+
+Markers are removed before syncing, so they never change the timing and never appear in captions. After
+you load the script, step 1 shows how many effects it found.
+
+**2. Place them (step 4, Sync & Review)**
+
+Rows with effects have an **Effects** button. Click it to open the scene's picture:
+
+- pick a pin in the list on the right, then **click on the picture where its tip should land**
+- **drag** pins and text to move them
+- the bright frame shows the part of the picture that's in the video
+
+Press **Save positions**. Until you place them, pins sit in the centre and text in the upper third.
+Positions are saved as a percentage of the picture, so they work at any resolution. They stay locked to
+the same spot while the picture zooms and pans. Press ▶ on the row to preview the scene.
+
+**3. Sounds (once, for all projects)**
+
+Open **Settings** in the left menu. Under **Effect sounds**, add a *Pin drop sound* and a *Text pop
+sound*, then set their volume. Each sound plays exactly on its word, mixed with your voice-over.
+
+**4. Looks**
+
+Change these in **Presets → Edit**, or for one project in step 4's **Project style**, under *Scene
+effects*: pin colour and size, label size, text font, size, colour and outline, and a background box.
+The default is a red map pin with bold white text and a black outline.
+
+Only scenes with effects take the slightly slower overlay path; every other scene renders as before.
 
 ## 5. How to name your media files
 
@@ -176,5 +222,8 @@ python tests/test_transcribe.py
 python tests/test_ui.py sample              # needs: pip install playwright
 python tests/make_long_sample.py long 800    # 800-scene, ~20-minute project
 python tests/test_ui_long.py long
+python tests/make_effects_sample.py fx    # map with 2 pins + a [TEXT: 1940] scene
+python tests/test_effects.py fx
+python tests/test_ui_effects.py fx
 python -m sceneforge.selfcheck
 ```

@@ -305,7 +305,7 @@ def sync(scenes, twords, audio_duration, lead_in=0.0):
     matched = sum(1 for m in match if m is not None)
     return {
         "scenes": results,
-        "words": [{"text": w["text"], "scene": w["scene"], "s": round(t[0], 3), "e": round(t[1], 3)}
+        "words": [{"text": w["text"], "scene": w["scene"], "s": round(t[0], 3), "e": round(t[1], 3), "m": t[2]}
                   for w, t in zip(words, word_times)],
         "match_rate": round(matched / total, 3) if total else 0.0,
     }
@@ -338,10 +338,15 @@ def _fill_estimates(results, tok_ranges, audio_duration):
 
 
 def _word_times(words, stoks, ttoks, match, audio_duration):
-    """Per display word (start, end). Unmatched words are spread between matched neighbours."""
+    """Per display word (start, end, measured).
+
+    Matched words take their transcript times. A run of unmatched script words (mis-heard, or heard as
+    several pieces) takes the times of the unmatched transcript words heard in the same gap, so it is still
+    measured from the audio. Only when nothing was heard there is the time spread out (measured = False).
+    """
     nw = len(words)
-    ws = [None] * nw
-    we = [None] * nw
+    ws, we = [None] * nw, [None] * nw
+    tlo, thi = [None] * nw, [None] * nw
     for ti, m in enumerate(match):
         if m is None:
             continue
@@ -349,6 +354,9 @@ def _word_times(words, stoks, ttoks, match, audio_duration):
         t = ttoks[m[0]]
         ws[wi] = t["s"] if ws[wi] is None else min(ws[wi], t["s"])
         we[wi] = t["e"] if we[wi] is None else max(we[wi], t["e"])
+        tlo[wi] = m[0] if tlo[wi] is None else min(tlo[wi], m[0])
+        thi[wi] = m[0] if thi[wi] is None else max(thi[wi], m[0])
+    measured = [x is not None for x in ws]
     i = 0
     while i < nw:
         if ws[i] is not None:
@@ -357,15 +365,28 @@ def _word_times(words, stoks, ttoks, match, audio_duration):
         j = i
         while j < nw and ws[j] is None:
             j += 1
-        left = we[i - 1] if i > 0 else 0.0
-        right = ws[j] if j < nw else min(audio_duration, left + 0.35 * (j - i) + 0.2)
-        right = max(right, left)
-        lens = [max(1, len(words[k]["text"])) for k in range(i, j)]
-        tot = sum(lens)
-        t = left
-        for k, L in zip(range(i, j), lens):
-            span = (right - left) * L / tot
-            ws[k], we[k] = t, t + span
-            t += span
+        run = list(range(i, j))
+        lo = thi[i - 1] + 1 if i > 0 else 0
+        hi = tlo[j] if j < nw else len(ttoks)
+        gap = ttoks[lo:hi] if hi - lo <= 4 * len(run) + 2 else []
+        if gap and len(gap) == len(run):
+            for k, t in zip(run, gap):
+                ws[k], we[k], measured[k] = t["s"], t["e"], True
+        else:
+            if gap:
+                left, right = gap[0]["s"], gap[-1]["e"]
+                for k in run:
+                    measured[k] = True
+            else:
+                left = we[i - 1] if i > 0 else 0.0
+                right = ws[j] if j < nw else min(audio_duration, left + 0.35 * (j - i) + 0.2)
+            right = max(right, left)
+            lens = [max(1, len(words[k]["text"])) for k in run]
+            tot = sum(lens)
+            t = left
+            for k, L in zip(run, lens):
+                span = (right - left) * L / tot
+                ws[k], we[k] = t, t + span
+                t += span
         i = j
-    return list(zip(ws, we))
+    return list(zip(ws, we, measured))

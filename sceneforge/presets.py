@@ -53,6 +53,18 @@ BASE = {
     "sync": {
         "lead_in": 0.0,            # cut this many seconds before the first word (0 = exactly on it)
     },
+    "effects": {                   # [PIN] and [TEXT: ...] scene effects
+        "pin_color": "#E53935",    # red map pin
+        "pin_size": 90,            # pin height in pixels at 1080p
+        "label_size": 44,          # size of a pin's label, e.g. [PIN: Rome]
+        "text_font": "Arial Bold",
+        "text_size": 96,
+        "text_color": "#FFFFFF",
+        "text_outline_color": "#000000",
+        "text_outline": 6,
+        "text_box": False,         # dark rounded box behind the text
+        "box_color": "#000000",
+    },
 }
 
 

@@ -308,3 +308,30 @@ table.t td.words { min-width: 220px; }
 .media-grid { max-height: none; }
 tr.focus td, .focus { animation: flash 1.8s ease-out; }
 @keyframes flash { 0%, 40% { background: #ede6ff; } }
+
+/* ---- scene effects editor */
+.fx-modal { width: min(1180px, 100%); }
+.fx-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 18px; align-items: start; }
+.fx-stage-wrap .help { margin-top: 8px; }
+.fx-stage { position: relative; display: inline-block; max-width: 100%; user-select: none; touch-action: none; cursor: crosshair; border-radius: 12px; overflow: hidden; background: #111; line-height: 0; }
+.fx-stage-wrap { text-align: center; }
+.fx-stage-wrap .help { text-align: left; }
+.fx-img { display: block; width: auto; height: auto; max-width: 100%; max-height: 64vh; }
+.fx-visible { position: absolute; border: 2px solid rgba(255, 255, 255, .9); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .38); pointer-events: none; border-radius: 3px; }
+.fx-mark { position: absolute; cursor: grab; line-height: 1.1; }
+.fx-mark.pin { width: 34px; height: 47px; transform: translate(-50%, -100%); }
+.fx-mark.pin .pin-svg { width: 100%; height: 100%; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .45)); }
+.fx-mark .fx-label { position: absolute; left: 32px; top: 2px; white-space: nowrap; color: #fff; font-weight: 700; font-size: 14px;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; }
+.fx-mark.text { transform: translate(-50%, -50%); font-weight: 800; font-size: 30px; white-space: nowrap; padding: 2px 6px;
+  text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 2px 6px rgba(0, 0, 0, .5); }
+.fx-mark.sel { outline: 2px dashed #a78bfa; outline-offset: 3px; border-radius: 6px; }
+.fx-list { display: flex; flex-direction: column; gap: 8px; }
+.fx-item { display: flex; gap: 10px; align-items: flex-start; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fff; }
+.fx-item.on { border: 2px solid #a78bfa; background: var(--violet-soft); padding: 9px; }
+.fx-item small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.fx-item .fx-ic { color: var(--purple); }
+.fx-btn.todo { border-color: #c4b5fd; background: var(--violet-soft); color: var(--purple); }
+.sound-card { min-width: 0; }
+@media (max-width: 900px) { .fx-body { grid-template-columns: 1fr; } }
+.row-actions { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; }

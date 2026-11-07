@@ -10,6 +10,9 @@ SCENE_RE = re.compile(
 # Things in [square brackets] or {curly braces} are treated as notes, not narration.
 NOTE_RE = re.compile(r"\[[^\]]*\]|\{[^}]*\}")
 MD_RE = re.compile(r"(\*\*|__|`|^#+\s*|^>\s*)", re.MULTILINE)
+# Scene effect markers, placed right before the word that triggers them: [PIN], [PIN: Rome], [TEXT: 1940]
+EFFECT_RE = re.compile(r"\[\s*(PIN|TEXT)\s*(?::\s*([^\]]*?))?\s*\]", re.IGNORECASE)
+_SENTINEL_RE = re.compile("\x01(\\d+)\x01")
 
 
 def read_script_file(path) -> str:
@@ -41,6 +44,47 @@ def clean_narration(text: str) -> str:
     return text.strip()
 
 
+def extract_effects(raw: str, scene_number=None):
+    """Remove [PIN] / [TEXT: ...] markers from a scene's narration.
+
+    Returns (clean narration, effects, warnings). Each effect is {"type": "pin"|"text", "text": str,
+    "word": n} where n is the index of the spoken word that follows the marker (counted exactly like the
+    sync does, so the effect lands on that word's measured time).
+    """
+    from .align import norm_tokens
+    found, warnings = [], []
+    where = f"Scene {scene_number}: " if scene_number is not None else ""
+
+    def sub(m):
+        kind, val = m.group(1).lower(), (m.group(2) or "").strip()
+        if kind == "text" and not val:
+            warnings.append(f"{where}[TEXT] needs words, like [TEXT: 1940] - it was ignored.")
+            return " "
+        found.append({"type": kind, "text": val})
+        return f" \x01{len(found) - 1}\x01 "
+
+    cleaned = clean_narration(EFFECT_RE.sub(sub, raw))
+    words, effects, count = [], [], 0
+    for tok in cleaned.split(" "):
+        m = _SENTINEL_RE.fullmatch(tok)
+        if m:
+            e = dict(found[int(m.group(1))])
+            e["word"] = count
+            effects.append(e)
+            continue
+        if not tok:
+            continue
+        words.append(tok)
+        if norm_tokens(tok):  # punctuation-only tokens are glued to the previous word, not counted
+            count += 1
+    for e in effects:
+        if e["word"] >= count:
+            warnings.append(f"{where}a [{e['type'].upper()}] marker has no word after it - it will appear on "
+                            "the scene's last word.")
+            e["word"] = max(0, count - 1)
+    return " ".join(words), effects, warnings
+
+
 def parse_scenes(text: str):
     """Return (scenes, warnings). Each scene = {"number": int, "text": str}."""
     warnings = []
@@ -62,8 +106,12 @@ def parse_scenes(text: str):
 
     out = []
     for s in scenes:
-        narration = clean_narration("\n".join(s["lines"]))
-        out.append({"number": s["number"], "text": narration})
+        narration, effects, fx_warn = extract_effects("\n".join(s["lines"]), s["number"])
+        warnings.extend(fx_warn)
+        sc = {"number": s["number"], "text": narration}
+        if effects:
+            sc["effects"] = effects
+        out.append(sc)
 
     if not out:
         warnings.append('No scenes found. Each scene must start with a label like "Scene 1:" on its own line.')

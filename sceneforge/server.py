@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import fonts, paths, pipeline, presets, render, script_parser, thumbs
+from . import align, effects, fonts, paths, pipeline, presets, render, script_parser, thumbs
 from .media import AUDIO_EXT, media_kind
 from .project import Project
 from .render import Renderer
@@ -130,10 +130,28 @@ def outputs(p):
     return [{"name": v.name, "path": p.rel(v), "size": v.stat().st_size, "mtime": v.stat().st_mtime} for v in vids]
 
 
+def effect_info(scene, timed):
+    """Effects of a scene for the browser: type, text, position, trigger word and (once synced) its time."""
+    fx = scene.get("effects") or []
+    if not fx:
+        return []
+    words, _ = align.script_words([{"text": scene["text"]}])
+    by_i = {e["i"]: e for e in timed}
+    out = []
+    for i, e in enumerate(fx):
+        k = min(int(e.get("word", 0)), max(0, len(words) - 1))
+        t = by_i.get(i)
+        out.append({"type": e["type"], "text": e.get("text", ""), "x": e.get("x", 0.5), "y": e.get("y", 0.5),
+                    "placed": bool(e.get("placed")), "word": words[k]["text"] if words else "",
+                    "t": t["t"] if t else None, "measured": t["measured"] if t else None})
+    return out
+
+
 def state(p: Project):
     d = p.data
     synced = bool(d.get("sync", {}).get("done"))
     tl = {r["number"]: r for r in p.timeline()} if p.scenes else {}
+    fx_times = effects.resolve(p) if synced and any(s.get("effects") for s in p.scenes) else {}
     scenes = []
     for s in p.scenes:
         mp = p.path(s.get("media"))
@@ -147,6 +165,7 @@ def state(p: Project):
             "edited": bool(s.get("edited")), "media": Path(s["media"]).name if has else None,
             "media_kind": media_kind(mp) if has else None,
             "media_v": int(mp.stat().st_mtime) if has else 0,
+            "effects": effect_info(s, fx_times.get(s["number"], [])),
         })
     music, sfx = p.path(d.get("music")), p.path(d.get("sfx"))
     return {
@@ -264,7 +283,8 @@ def read_script(file: UploadFile = File(...)):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     scenes, warnings = pipeline.check_script(text)
-    return {"text": text, "count": len(scenes), "warnings": warnings}
+    return {"text": text, "count": len(scenes), "warnings": warnings,
+            "effects": sum(len(s.get("effects", [])) for s in scenes)}
 
 
 class ScriptBody(BaseModel):
@@ -431,6 +451,107 @@ def preview(folder: str, number: int):
         return {"file": pp.rel(out), "v": int(time.time())}
 
     return start_job("preview", folder, work)
+
+
+class EffectPositions(BaseModel):
+    positions: List[dict]
+
+
+@app.put("/api/projects/{folder}/scenes/{number}/effects")
+def set_effect_positions(folder: str, number: int, body: EffectPositions):
+    p = load(folder)
+    sc = p.scene(number)
+    if not sc or not sc.get("effects"):
+        raise HTTPException(404, "This scene has no effects")
+    if len(body.positions) != len(sc["effects"]):
+        raise UserError("The scene's effects changed - reopen the Effects window.")
+    for e, pos in zip(sc["effects"], body.positions):
+        e["x"] = round(min(1.0, max(0.0, float(pos.get("x", 0.5)))), 5)
+        e["y"] = round(min(1.0, max(0.0, float(pos.get("y", 0.5)))), 5)
+        e["placed"] = True
+    p.save()
+    return state(p)
+
+
+@app.get("/api/projects/{folder}/scenes/{number}/still")
+def scene_still(folder: str, number: int):
+    """The scene's full picture (for placing effects). For a clip, a frame from 1 s in."""
+    p = load(folder)
+    sc = p.scene(number)
+    mp = p.path(sc.get("media")) if sc else None
+    if not mp or not mp.exists():
+        raise HTTPException(404, "No media for this scene")
+    if media_kind(mp) != "video":
+        return FileResponse(mp)
+    from . import ffmpeg_utils as ff
+    st = mp.stat()
+    out = p.work_dir / "stills" / f"{mp.stem}_{st.st_size}_{int(st.st_mtime)}.jpg"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        dur = ff.duration(mp)
+        ff.run(["-ss", f"{min(1.0, dur / 2):.2f}", "-i", str(mp), "-frames:v", "1", "-q:v", "3", str(out)],
+               desc="still frame")
+    return FileResponse(out)
+
+
+# ------------------------------------------------------------------------------------------------ effect sounds
+def sounds_state():
+    return {k: {"name": v["name"] if v["path"] else None, "volume": v["volume"]}
+            for k, v in effects.sound_settings().items()}
+
+
+@app.get("/api/effect-sounds")
+def get_effect_sounds():
+    return sounds_state()
+
+
+@app.post("/api/effect-sounds/{kind}")
+def upload_effect_sound(kind: str, file: UploadFile = File(...)):
+    if kind not in effects.SOUND_KINDS:
+        raise HTTPException(404)
+    tmp, saved = save_uploads([file])
+    try:
+        f = saved[0]
+        if f.suffix.lower() not in AUDIO_EXT:
+            raise UserError("Use an audio file (MP3, WAV, M4A ...).")
+        for old in effects.sounds_dir().glob(f"{kind}.*"):
+            old.unlink(missing_ok=True)
+        dest = effects.sounds_dir() / f"{kind}{f.suffix.lower()}"
+        shutil.copy2(f, dest)
+        effects.save_sound_settings(kind, file=dest.name, name=f.name)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return sounds_state()
+
+
+class VolumeBody(BaseModel):
+    volume: float
+
+
+@app.patch("/api/effect-sounds/{kind}")
+def set_effect_sound_volume(kind: str, body: VolumeBody):
+    if kind not in effects.SOUND_KINDS:
+        raise HTTPException(404)
+    effects.save_sound_settings(kind, volume=round(min(1.5, max(0.0, body.volume)), 3))
+    return sounds_state()
+
+
+@app.delete("/api/effect-sounds/{kind}")
+def delete_effect_sound(kind: str):
+    if kind not in effects.SOUND_KINDS:
+        raise HTTPException(404)
+    for old in effects.sounds_dir().glob(f"{kind}.*"):
+        old.unlink(missing_ok=True)
+    effects.save_sound_settings(kind, file=None, name=None)
+    return sounds_state()
+
+
+@app.get("/api/effect-sounds/{kind}/file")
+def effect_sound_file(kind: str):
+    v = effects.sound_settings().get(kind)
+    if not v or not v["path"]:
+        raise HTTPException(404)
+    return FileResponse(v["path"])
 
 
 class RenderBody(BaseModel):

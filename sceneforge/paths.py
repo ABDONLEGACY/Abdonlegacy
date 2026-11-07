@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent.parent
-SETTINGS_DIR = APP_DIR / "settings"
+SETTINGS_DIR = Path(os.environ.get("SCENEFORGE_SETTINGS") or APP_DIR / "settings")  # env: tests only
 MODELS_DIR = APP_DIR / "models"
 FONTS_DIR = APP_DIR / "fonts"
 APP_SETTINGS_FILE = SETTINGS_DIR / "app_settings.json"

@@ -27,6 +27,7 @@ from .media import media_kind
 from .motion import plan_motions
 from .sources import ImageSource, VideoSource
 from .transitions import blend, plan_transitions
+from . import effects
 
 FPS = 30
 QUALITY = {"fast": ("superfast", 21), "standard": ("veryfast", 19), "high": ("medium", 17)}
@@ -93,6 +94,7 @@ class Timeline:
             if kind != "video":
                 image_scenes.add(num)
         self.motions = plan_motions(self.numbers, image_scenes, st, seed)
+        self.effects = effects.resolve(project)  # {scene number: [pin / text effects with trigger times]}
         # pieces
         self.pieces = []
         for k in range(self.n):
@@ -118,7 +120,27 @@ class Timeline:
             d.update(fit=c["fit_mode"], slow=c["max_slowdown"])
         else:
             d["motion"] = self.motions.get(self.numbers[k])
+        fx = self.effects.get(self.numbers[k])
+        if fx:  # only scenes with effects carry these, so other scenes' finished parts stay valid
+            d["effects"] = fx
+            d["effects_style"] = self.p.settings.get("effects")
         return d
+
+
+class EffectSource:
+    """Wraps a scene's frame source and draws its pins / text on every frame, locked to the picture."""
+
+    def __init__(self, src, layer):
+        self.src, self.layer = src, layer
+
+    def frames(self, a, b):
+        for k, fr in enumerate(self.src.frames(a, b), start=a):
+            fr = np.array(fr)  # writable copy
+            self.layer.draw(fr, k, self.src.project)
+            yield fr
+
+    def close(self):
+        self.src.close()
 
 
 class Renderer:
@@ -165,6 +187,10 @@ class Renderer:
         else:
             plan = self.tl.motions[self.tl.numbers[k]]
             src = ImageSource(path or self._placeholder(k), self.W, self.H, length, plan)
+        fx = self.tl.effects.get(self.tl.numbers[k])
+        if fx:  # only scenes with effects take the (slower) overlay path
+            src = EffectSource(src, effects.EffectLayer(fx, self.p.settings.get("effects"), self.W, self.H,
+                                                        self.fps, e0))
         self._sources[k] = src
         return src
 
@@ -372,6 +398,18 @@ class Renderer:
                     continue
                 fx.add(start - t0, whoosh, vol)
                 used = True
+        # scene effect sounds (pin drop / text pop), exactly at each effect's word
+        snd = effects.sound_settings()
+        cache = {}
+        for items in self.tl.effects.values():
+            for e in items:
+                cfg = snd.get(e["type"])
+                if not cfg or not cfg["path"] or not (t0 - 2 <= e["t"] < t1):
+                    continue
+                if e["type"] not in cache:
+                    cache[e["type"]] = ff.read_audio_f32(cfg["path"], sr=audiomod.SR)
+                fx.add(e["t"] - t0, cache[e["type"]], cfg["volume"])
+                used = True
         fx_wav = None
         if used:
             fx_wav = self.dir / "fx_track.wav"
@@ -408,7 +446,9 @@ class Renderer:
         d = {"v": RENDER_VERSION, "range": [round(t0, 4), round(t1, 4)], "voice": fstat(p.work_dir / "voice.wav"),
              "music": fstat(p.path(p.data.get("music"))), "sfx": fstat(p.path(p.data.get("sfx"))),
              "audio": st["audio"], "clips_cfg": st["clips"], "clips": clips, "fps": self.fps,
-             "whoosh": [[self.tl.B[k + 1], h] for k, h in enumerate(self.tl.h) if h > 0] if p.data.get("sfx") else []}
+             "whoosh": [[self.tl.B[k + 1], h] for k, h in enumerate(self.tl.h) if h > 0] if p.data.get("sfx") else [],
+             "effects": [[e["type"], e["t"]] for items in self.tl.effects.values() for e in items],
+             "effect_sounds": {k: [fstat(v["path"]), v["volume"]] for k, v in effects.sound_settings().items()}}
         return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 
     # ---- top level ---------------------------------------------------------------

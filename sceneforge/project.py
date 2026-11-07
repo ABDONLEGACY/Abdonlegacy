@@ -18,6 +18,30 @@ def safe_name(name: str) -> str:
     return name[:80] or "Untitled"
 
 
+def default_effect_position(kind, index_of_kind):
+    """Pins start in the centre (spread a little if there are several); text in the upper third."""
+    if kind == "pin":
+        step = (index_of_kind + 1) // 2 * (1 if index_of_kind % 2 else -1)
+        return {"x": min(0.9, max(0.1, 0.5 + 0.12 * step)), "y": 0.5}
+    return {"x": 0.5, "y": min(0.3, 0.2 + 0.07 * index_of_kind)}
+
+
+def merge_effect_positions(effects, old_effects):
+    """Give new effects positions: keep the user's placement when the same effect (by order and type) existed."""
+    out, counts = [], {}
+    for i, e in enumerate(effects):
+        e = dict(e)
+        n = counts.get(e["type"], 0)
+        counts[e["type"]] = n + 1
+        o = old_effects[i] if i < len(old_effects) else None
+        if o and o.get("type") == e["type"] and "x" in o:
+            e["x"], e["y"], e["placed"] = o["x"], o["y"], o.get("placed", False)
+        else:
+            e.update(default_effect_position(e["type"], n), placed=False)
+        out.append(e)
+    return out
+
+
 class Project:
     def __init__(self, folder):
         self.dir = Path(folder)
@@ -141,11 +165,14 @@ class Project:
         new = []
         for s in parsed_scenes:
             o = old.get(s["number"], {})
-            new.append({
+            sc = {
                 "number": s["number"], "text": s["text"],
                 "start": None, "auto_start": None, "flag": "", "confidence": None,
                 "media": o.get("media"),
-            })
+            }
+            if s.get("effects"):
+                sc["effects"] = merge_effect_positions(s["effects"], o.get("effects") or [])
+            new.append(sc)
         self.data["script_text"] = text
         self.data["expected_scenes"] = expected
         self.data["scenes"] = new
