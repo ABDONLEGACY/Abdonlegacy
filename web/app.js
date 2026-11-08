@@ -774,8 +774,8 @@ function fillReview(panel) {
   const parts = [];
   if (p.flagged.length) parts.push(`<div class="notice warn">${icon("alert")}<div><b>Check these scenes:</b> ${p.flagged.slice(0, 40).join(", ")}. Press ▶ to preview, then nudge the start if needed.</div></div>`);
   if (p.missing.length) parts.push(`<div class="notice err">${icon("image")}<div><b>Missing media:</b> scenes ${p.missing.slice(0, 40).join(", ")}. They will show a dark "media missing" card.</div></div>`);
-  const unplaced = p.scenes.filter((s) => (s.effects || []).some((e) => !e.placed)).map((s) => s.number);
-  if (unplaced.length) parts.push(`<div class="notice info">${icon("pin")}<div><b>Scene effects to place:</b> scenes ${unplaced.slice(0, 40).join(", ")}. Press <b>Effects</b> on those rows to click where each pin lands and drag where each text sits (until then pins sit in the centre and text in the upper third).</div></div>`);
+  const unplaced = p.scenes.filter((s) => (s.effects || []).some((e) => e.type === "pin" && !e.placed)).map((s) => s.number);
+  if (unplaced.length) parts.push(`<div class="notice info">${icon("pin")}<div><b>Scene effects to place:</b> scenes ${unplaced.slice(0, 40).join(", ")}. Press <b>Effects</b> on those rows and click where each pin should land (until then pins sit in the centre). [TEXT] places itself in the emptiest part of the picture - drag it there if you want it somewhere else.</div></div>`);
   n.innerHTML = parts.join("");
   const info = pageOf("review");
   $(".s4-bar", panel).replaceChildren(pageBar("review", info, () => fillReview(panel), ["all", "flagged", "missing", "edited", "effects"]));
@@ -789,7 +789,7 @@ function fillReview(panel) {
     <td class="words">${esc(s.text.split(/\s+/).slice(0, 16).join(" "))} ...</td>
     <td>${statusCell(s)}</td><td>${nudgeControls(s)}</td>
     <td><div class="row-actions"><button class="btn sm" data-prev="${s.number}" title="Preview this scene">${icon("play-s")}</button>
-      ${(s.effects || []).length ? `<button class="btn sm fx-btn ${s.effects.some((e) => !e.placed) ? "todo" : ""}" data-fx="${s.number}" title="Place this scene's pins and text">${icon("pin")} Effects (${s.effects.length})</button>` : ""}</div></td></tr>`).join("");
+      ${(s.effects || []).length ? `<button class="btn sm fx-btn ${s.effects.some((e) => e.type === "pin" && !e.placed) ? "todo" : ""}" data-fx="${s.number}" title="Place this scene's pins and text">${icon("pin")} Effects (${s.effects.length})</button>` : ""}</div></td></tr>`).join("");
   fillIcons(tb);
   wireNudges(tb, () => fillReview(panel));
   focusRow(tb, "review");
@@ -825,13 +825,15 @@ function openEffects(number, after) {
       </div><div class="help">The bright frame shows the part of the picture that is in the video. Positions are saved as a percentage of the picture, so they work at any resolution and follow the zoom and pan.</div></div>
       <div class="fx-list"></div>
     </div>
-    <div class="modal-f"><button class="btn" id="fx-reset">${icon("refresh")} Default positions</button><span style="flex:1"></span>
+    <div class="modal-f"><button class="btn" id="fx-reset" title="Text: automatic placement in the emptiest area. Pins: centre.">${icon("refresh")} Automatic positions</button><span style="flex:1"></span>
       <button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="fx-save">${icon("save")} Save positions</button></div></div>`);
   const stage = $(".fx-stage", m), img = $(".fx-img", m), list = $(".fx-list", m);
   const markers = fx.map((e, i) => {
     const mk = e.type === "pin"
       ? el(`<div class="fx-mark pin" title="${esc(name(e, i))}">${PIN_SVG}${e.text ? `<span class="fx-label">${esc(e.text)}</span>` : ""}</div>`)
-      : el(`<div class="fx-mark text" title="${esc(name(e, i))}" style="color:${esc(style.text_color || "#fff")}">${esc(e.text)}</div>`);
+      : (style.text_style || "hand_underline") === "hand_underline"
+        ? el(`<div class="fx-mark text hand" title="${esc(name(e, i))}" style="--ink:${esc(style.hand_color || "#262523")};--halo:${esc(style.hand_halo || "#F5F2EA")};--line:${esc(style.underline_color || "#C34D48")};--rot:${e.angle || 0}deg;font-family:'${esc(style.hand_font || "Itim")}', 'SF Itim', sans-serif">${esc(e.text.toUpperCase())}${style.underline === false ? "" : '<span class="fx-line"></span>'}</div>`)
+        : el(`<div class="fx-mark text" title="${esc(name(e, i))}" style="color:${esc(style.text_color || "#fff")}">${esc(e.text)}</div>`);
     stage.appendChild(mk);
     return mk;
   });
@@ -844,7 +846,7 @@ function openEffects(number, after) {
     list.innerHTML = `<div class="label-up">Effects in this scene</div>` + fx.map((e, i) => `<button class="fx-item ${i === sel ? "on" : ""}" data-i="${i}">
       <span class="fx-ic">${icon(e.type === "pin" ? "pin" : "type")}</span><span><b>${esc(name(e, i))}</b>
       <small>on the word "${esc(e.word)}"${e.t !== null && e.t !== undefined ? ` at ${fmtT(e.t)}` : " (sync first to see the time)"}${e.measured === false ? " ⚠ estimated" : ""}</small>
-      <small>${Math.round(e.x * 100)}% across, ${Math.round(e.y * 100)}% down</small></span></button>`).join("") +
+      <small>${Math.round(e.x * 100)}% across, ${Math.round(e.y * 100)}% down${e.type === "text" && e.auto && !e.placed ? " · <b>auto-placed</b> (drag to move)" : ""}</small></span></button>`).join("") +
       `<div class="help" style="margin-top:12px">Pins land with their <b>tip</b> on the spot you click. Text is centred on its spot.</div>`;
     fillIcons(list);
     $$(".fx-item", list).forEach((b) => (b.onclick = () => { sel = parseInt(b.dataset.i, 10); place(); }));
@@ -859,7 +861,14 @@ function openEffects(number, after) {
     const v = $(".fx-visible", m);
     const w = a > A ? A / a : 1, h = a > A ? 1 : a / A;
     Object.assign(v.style, { left: ((1 - w) / 2 * 100) + "%", top: ((1 - h) / 2 * 100) + "%", width: (w * 100) + "%", height: (h * 100) + "%" });
+    // show text at the size it will have in the video
+    const r = img.getBoundingClientRect();
+    const frameMin = Math.min(w * r.width, h * r.height);
+    const hand = (style.text_style || "hand_underline") === "hand_underline";
+    const px = (hand ? (style.hand_size || 150) : (style.text_size || 96)) / 1080 * frameMin;
+    markers.forEach((mk, i) => { if (fx[i].type === "text") mk.style.fontSize = Math.max(9, px) + "px"; });
   };
+  window.addEventListener("resize", visible);
   img.onload = visible;
   stage.addEventListener("pointerdown", (ev) => {
     const mk = ev.target.closest(".fx-mark");
@@ -867,21 +876,21 @@ function openEffects(number, after) {
     if (i < 0) return;
     sel = i;
     ev.preventDefault();
-    const move = (e2) => { const f = toFrac(e2); fx[i].x = f.x; fx[i].y = f.y; place(); };
+    const move = (e2) => { const f = toFrac(e2); fx[i].x = f.x; fx[i].y = f.y; fx[i].placed = true; place(); };
     if (!mk) move(ev);  // click on the picture: put the selected effect there
     stage.setPointerCapture(ev.pointerId);
     stage.onpointermove = move;
     stage.onpointerup = () => { stage.onpointermove = null; stage.onpointerup = null; };
     place();
   });
-  $("#fx-reset", m).onclick = () => {
-    let pins = 0, texts = 0;
-    fx.forEach((e) => {
-      if (e.type === "pin") { const k = pins++; const step = Math.floor((k + 1) / 2) * (k % 2 ? 1 : -1); e.x = Math.min(0.9, Math.max(0.1, 0.5 + 0.12 * step)); e.y = 0.5; }
-      else { e.x = 0.5; e.y = Math.min(0.3, 0.2 + 0.07 * texts++); }
-    });
-    place();
-  };
+  $("#fx-reset", m).onclick = () => guard(async () => {
+    // text goes back to automatic placement (emptiest area, away from faces), pins to the centre
+    S.project = await api("POST", `/api/projects/${encodeURIComponent(p.folder)}/scenes/${number}/effects/auto`);
+    closeModal();
+    toast("Back to automatic placement.", "ok");
+    if (after) after();
+    openEffects(number, after);
+  });
   $("#fx-save", m).onclick = () => guard(async () => {
     S.project = await api("PUT", `/api/projects/${encodeURIComponent(p.folder)}/scenes/${number}/effects`,
       { positions: fx.map((e) => ({ x: e.x, y: e.y })) });
@@ -1039,13 +1048,20 @@ function schema() {
       { k: "keep_audio", t: "toggle", l: "Keep clip audio (sound effects under the voice)", wide: 1 },
     ] },
     { sec: "effects", title: "Scene effects ([PIN] and [TEXT])", icon: "pin", fields: [
+      { k: "text_style", t: "one", l: "[TEXT] style", opts: (S.meta && S.meta.text_styles) || { hand_underline: "Hand-lettered + underline", classic: "Classic pop" }, wide: 1 },
+      { k: "hand_font", t: "select", l: "Hand-lettered: font", opts: Object.fromEntries(fonts.map((f) => [f, f])) },
+      { k: "hand_size", t: "range", l: "Hand-lettered: size (px at 1080p)", min: 40, max: 260, step: 1 },
+      { k: "hand_color", t: "color", l: "Hand-lettered: letter colour" },
+      { k: "hand_halo", t: "color", l: "Hand-lettered: outline (halo) colour" },
+      { k: "underline", t: "toggle", l: "Red underline that draws itself" },
+      { k: "underline_color", t: "color", l: "Underline colour" },
       { k: "pin_color", t: "color", l: "Pin colour" },
       { k: "pin_size", t: "range", l: "Pin size (px at 1080p)", min: 30, max: 220, step: 1 },
-      { k: "text_font", t: "select", l: "Text font", opts: Object.fromEntries(fonts.map((f) => [f, f])) },
-      { k: "text_size", t: "range", l: "Text size (px at 1080p)", min: 24, max: 240, step: 1 },
-      { k: "text_color", t: "color", l: "Text colour" },
-      { k: "text_outline_color", t: "color", l: "Text outline colour" },
-      { k: "text_outline", t: "range", l: "Text outline thickness", min: 0, max: 20, step: 1 },
+      { k: "text_font", t: "select", l: "Classic text & pin labels: font", opts: Object.fromEntries(fonts.map((f) => [f, f])) },
+      { k: "text_size", t: "range", l: "Classic text: size (px at 1080p)", min: 24, max: 240, step: 1 },
+      { k: "text_color", t: "color", l: "Classic text & labels: colour" },
+      { k: "text_outline_color", t: "color", l: "Classic text & labels: outline colour" },
+      { k: "text_outline", t: "range", l: "Classic text & labels: outline thickness", min: 0, max: 20, step: 1 },
       { k: "label_size", t: "range", l: "Pin label size (px at 1080p)", min: 16, max: 120, step: 1 },
       { k: "text_box", t: "toggle", l: "Background box behind text and labels" },
       { k: "box_color", t: "color", l: "Box colour" },
@@ -1119,7 +1135,7 @@ function readSettingsForm(f, base) {
     else if (t === "many") v = $$(".chip.on", w).map((c) => c.dataset.v);
     else if (t === "select") v = $("select", w).value;
     else if (t === "color") v = $("input[type=text]", w).value.toUpperCase();
-    if (["size", "outline", "max_words", "pin_size", "text_size", "text_outline", "label_size"].includes(k)) v = Math.round(v);
+    if (["size", "outline", "max_words", "pin_size", "text_size", "text_outline", "label_size", "hand_size"].includes(k)) v = Math.round(v);
     st[s][k] = v;
   });
   const m = st.motion;
@@ -1355,9 +1371,10 @@ async function renderEffectSounds() {
   const st = await api("GET", "/api/effect-sounds").catch(() => null);
   if (!st) return;
   box.innerHTML = "";
-  [["pin", "Pin drop sound", "e.g. a soft thud or click"], ["text", "Text pop sound", "e.g. a short pop or swoosh"]].forEach(([kind, title, hint]) => {
+  [["pin", "Pin drop sound", "e.g. a soft thud or click"], ["text", "Text pop sound", "e.g. a short pop or swoosh"],
+   ["underline", "Underline scribble sound (optional)", "a soft marker scribble while the red line draws"]].forEach(([kind, title, hint]) => {
     const c = st[kind];
-    const col = el(`<div class="sound-card" data-kind="${kind}"><div class="field-title" style="margin-top:0">${icon(kind === "pin" ? "pin" : "type")} ${title}</div></div>`);
+    const col = el(`<div class="sound-card" data-kind="${kind}"><div class="field-title" style="margin-top:0">${icon(kind === "pin" ? "pin" : kind === "text" ? "type" : "edit")} ${title}</div></div>`);
     if (c.name) {
       const it = el(`<div><div class="fileitem">${icon("audio")}<span class="nm">${esc(c.name)}</span>
         <button class="btn xs" data-play>${icon("play-s")} Play</button><button class="btn xs danger" data-del>${icon("trash")} Remove</button></div>
@@ -1410,6 +1427,8 @@ window.go = go;
   fillIcons(document);
   try {
     S.meta = await api("GET", "/api/meta");
+    const faces = Object.entries(S.meta.bundled_fonts || {}).map(([n, f]) => `@font-face { font-family: '${n}'; src: url('/api/font/${encodeURIComponent(f)}'); }`).join("\n");
+    document.head.appendChild(el(`<style>${faces}</style>`));
     $("#version").textContent = `SceneForge ${S.meta.version} · local`;
     const cur = await api("GET", "/api/jobs");
     if (cur.job) {

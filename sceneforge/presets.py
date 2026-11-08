@@ -54,6 +54,13 @@ BASE = {
         "lead_in": 0.0,            # cut this many seconds before the first word (0 = exactly on it)
     },
     "effects": {                   # [PIN] and [TEXT: ...] scene effects
+        "text_style": "hand_underline",  # hand_underline (comic lettering + red marker line) | classic
+        "hand_font": "Itim",       # bundled free font (SIL OFL)
+        "hand_size": 150,          # font size in pixels at 1080p
+        "hand_color": "#262523",   # letters
+        "hand_halo": "#F5F2EA",    # thick sticker-like outline
+        "underline": True,
+        "underline_color": "#C34D48",
         "pin_color": "#E53935",    # red map pin
         "pin_size": 90,            # pin height in pixels at 1080p
         "label_size": 44,          # size of a pin's label, e.g. [PIN: Rome]

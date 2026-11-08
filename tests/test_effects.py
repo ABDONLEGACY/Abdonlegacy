@@ -138,11 +138,14 @@ def test_render_and_sound(p, fx):
                 print(f"  pin {e['text']}: red pixels at the city 0.5s before={before}, on the word={landed}, 1s after={after}")
                 assert before < 20 and landed > 200 and after > 200
             else:
-                c = frames[g - 2][int(Y) - 20:int(Y) + 20, int(X) - 60:int(X) + 60]
-                d = frames[g + 10][int(Y) - 20:int(Y) + 20, int(X) - 60:int(X) + 60]
-                white_before, white_after = int((c.min(axis=2) > 235).sum()), int((d.min(axis=2) > 235).sum())
-                print(f"  text {e['text']}: white text pixels just before the word={white_before}, 1/3 s after={white_after}")
-                assert white_after > 300 and white_after > 5 * (white_before + 1)
+                # pixels the text changes compared with the plain picture (works for every text style)
+                def changed(gg):
+                    plain = src.src.frame(gg - r.tl.ext[k][0]).astype(int)
+                    box = (slice(max(0, int(Y) - 90), int(Y) + 90), slice(max(0, int(X) - 260), int(X) + 260))
+                    return int((np.abs(frames[gg].astype(int) - plain)[box].sum(axis=2) > 90).sum())
+                before, after = changed(g - 2), changed(g + 10)
+                print(f"  text {e['text']}: pixels changed by the text just before the word={before}, 1/3 s after={after}")
+                assert after > 300 and after > 5 * (before + 1)
             picks = [(-0.20, "falling"), (0.0, "ON THE WORD"), (0.15, "bounce"), (1.0, "+1 s")] if e["type"] == "pin" \
                 else [(-0.1, "before"), (0.0, "ON THE WORD"), (0.12, "popping"), (1.0, "+1 s")]
             row = []

@@ -115,7 +115,14 @@ Scene 5: Everything changed in [TEXT: 1940] 1940 when the war reached the coast.
 - `[PIN]` drops a map pin when the next word is spoken. It falls from above and lands on the word, with
   a small bounce, a soft shadow and a ripple ring.
 - `[PIN: Rome]` does the same and shows the label "Rome" next to the pin.
-- `[TEXT: 1940]` pops up "1940" when the next word is spoken. It stays until the scene ends and fades
+- `[TEXT: 1940]` shows "1940" when the next word is spoken. It stays until the scene ends and fades
+  out with the transition. There are two looks:
+  - **Hand-lettered + underline** (the default): comic-style hand-lettered CAPITALS (the free font Itim,
+    included), black letters with a thick white sticker outline and an almost invisible shadow. The text
+    tilts slightly (between -4 and +2 degrees, different on each scene, the same on every render). It
+    fades and scales in calmly from 90 %, then a red marker line draws itself under it from left to
+    right in half a second.
+  - **Classic pop**: the earlier white bold text that pops in with a small bounce.
   out with the transition.
 
 Markers are removed before syncing, so they never change the timing and never appear in captions. After
@@ -123,26 +130,37 @@ you load the script, step 1 shows how many effects it found.
 
 **2. Place them (step 4, Sync & Review)**
 
+**[TEXT] places itself** in the emptiest part of the picture, such as sky, a plain background or open ground.
+It avoids faces and busy areas, prefers the top of the frame, stays inside safe margins and keeps clear
+of the captions.
+
 Rows with effects have an **Effects** button. Click it to open the scene's picture:
 
 - pick a pin in the list on the right, then **click on the picture where its tip should land**
 - **drag** pins and text to move them
 - the bright frame shows the part of the picture that's in the video
 
-Press **Save positions**. Until you place them, pins sit in the centre and text in the upper third.
+Press **Save positions**. Until you place them, pins sit in the centre and text is placed automatically.
+**Automatic positions** puts everything back.
 Positions are saved as a percentage of the picture, so they work at any resolution. They stay locked to
 the same spot while the picture zooms and pans. Press ▶ on the row to preview the scene.
 
 **3. Sounds (once, for all projects)**
 
 Open **Settings** in the left menu. Under **Effect sounds**, add a *Pin drop sound* and a *Text pop
-sound*, then set their volume. Each sound plays exactly on its word, mixed with your voice-over.
+sound*, then set their volume. You can also add an optional *Underline scribble sound*, which plays while
+the red line draws itself. Each sound plays exactly on its moment, mixed with your voice-over.
 
 **4. Looks**
 
 Change these in **Presets → Edit**, or for one project in step 4's **Project style**, under *Scene
-effects*: pin colour and size, label size, text font, size, colour and outline, and a background box.
-The default is a red map pin with bold white text and a black outline.
+effects*:
+
+- **[TEXT] style**: choose *Hand-lettered + underline* or *Classic pop*.
+- **Hand-lettered settings**: font, size, letter colour, outline colour, whether the underline appears,
+  and the underline colour.
+- **Classic settings and pin labels**: font, size, colour, outline, and a background box.
+- **Pins**: colour, size and label size.
 
 Only scenes with effects take the slightly slower overlay path; every other scene renders as before.
 
@@ -195,6 +213,12 @@ Screen and sleep → "Never" while plugged in). Long renders keep the CPU busy, 
 
 ---
 
+## Credits
+
+The bundled font **Itim** (by Cadson Demak) is licensed under the SIL Open Font License; see
+`fonts/Itim-OFL.txt`. The face detector **YuNet** (OpenCV Zoo) is MIT-licensed; see
+`sceneforge/data/YUNET-LICENSE.txt`.
+
 ## For the curious: how it works
 
 - **Sync**: faster-whisper (the "small" or "medium" model, on the CPU in int8) writes down every word
@@ -225,5 +249,7 @@ python tests/test_ui_long.py long
 python tests/make_effects_sample.py fx    # map with 2 pins + a [TEXT: 1940] scene
 python tests/test_effects.py fx
 python tests/test_ui_effects.py fx
+python tests/make_hand_sample.py hand YOUR_PICTURE.png   # [TEXT: William Donovan] + [TEXT: 1985]
+python tests/test_hand_text.py hand
 python -m sceneforge.selfcheck
 ```

@@ -94,7 +94,9 @@ class Timeline:
             if kind != "video":
                 image_scenes.add(num)
         self.motions = plan_motions(self.numbers, image_scenes, st, seed)
-        self.effects = effects.resolve(project)  # {scene number: [pin / text effects with trigger times]}
+        # {scene number: [pin / text effects with position, tilt and trigger time]} - only synced effects render
+        self.effects = {n: [e for e in items if e["t"] is not None] for n, items in effects.resolve(project).items()}
+        self.effects = {n: items for n, items in self.effects.items() if items}
         # pieces
         self.pieces = []
         for k in range(self.n):
@@ -410,6 +412,16 @@ class Renderer:
                     cache[e["type"]] = ff.read_audio_f32(cfg["path"], sr=audiomod.SR)
                 fx.add(e["t"] - t0, cache[e["type"]], cfg["volume"])
                 used = True
+            # the optional "marker scribble" while the underline draws itself
+            line = snd.get("underline")
+            est = {**effects.DEFAULT_STYLE, **(st.get("effects") or {})}
+            if line and line["path"] and est.get("text_style") == "hand_underline" and est.get("underline", True):
+                for e in items:
+                    if e["type"] == "text" and t0 - 2 <= e["t"] < t1:
+                        if "underline" not in cache:
+                            cache["underline"] = ff.read_audio_f32(line["path"], sr=audiomod.SR)
+                        fx.add(e["t"] + effects.LINE_DELAY - t0, cache["underline"], line["volume"])
+                        used = True
         fx_wav = None
         if used:
             fx_wav = self.dir / "fx_track.wav"
@@ -448,6 +460,7 @@ class Renderer:
              "audio": st["audio"], "clips_cfg": st["clips"], "clips": clips, "fps": self.fps,
              "whoosh": [[self.tl.B[k + 1], h] for k, h in enumerate(self.tl.h) if h > 0] if p.data.get("sfx") else [],
              "effects": [[e["type"], e["t"]] for items in self.tl.effects.values() for e in items],
+             "effect_style": [st.get("effects", {}).get(k) for k in ("text_style", "underline")],
              "effect_sounds": {k: [fstat(v["path"]), v["volume"]] for k, v in effects.sound_settings().items()}}
         return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 

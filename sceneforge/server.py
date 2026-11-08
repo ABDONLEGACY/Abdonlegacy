@@ -130,20 +130,22 @@ def outputs(p):
     return [{"name": v.name, "path": p.rel(v), "size": v.stat().st_size, "mtime": v.stat().st_mtime} for v in vids]
 
 
-def effect_info(scene, timed):
-    """Effects of a scene for the browser: type, text, position, trigger word and (once synced) its time."""
+def effect_info(scene, resolved):
+    """Effects of a scene for the browser: type, text, position (yours, or the automatic one), tilt, trigger
+    word and (once synced) its time."""
     fx = scene.get("effects") or []
     if not fx:
         return []
     words, _ = align.script_words([{"text": scene["text"]}])
-    by_i = {e["i"]: e for e in timed}
+    by_i = {e["i"]: e for e in resolved}
     out = []
     for i, e in enumerate(fx):
         k = min(int(e.get("word", 0)), max(0, len(words) - 1))
-        t = by_i.get(i)
-        out.append({"type": e["type"], "text": e.get("text", ""), "x": e.get("x", 0.5), "y": e.get("y", 0.5),
-                    "placed": bool(e.get("placed")), "word": words[k]["text"] if words else "",
-                    "t": t["t"] if t else None, "measured": t["measured"] if t else None})
+        r = by_i.get(i, {})
+        out.append({"type": e["type"], "text": e.get("text", ""), "x": r.get("x", e.get("x", 0.5)),
+                    "y": r.get("y", e.get("y", 0.5)), "placed": bool(e.get("placed")), "auto": bool(r.get("auto")),
+                    "angle": r.get("angle", 0.0), "word": words[k]["text"] if words else "",
+                    "t": r.get("t"), "measured": r.get("measured")})
     return out
 
 
@@ -151,7 +153,7 @@ def state(p: Project):
     d = p.data
     synced = bool(d.get("sync", {}).get("done"))
     tl = {r["number"]: r for r in p.timeline()} if p.scenes else {}
-    fx_times = effects.resolve(p) if synced and any(s.get("effects") for s in p.scenes) else {}
+    fx_times = effects.resolve(p) if any(s.get("effects") for s in p.scenes) else {}
     scenes = []
     for s in p.scenes:
         mp = p.path(s.get("media"))
@@ -473,6 +475,32 @@ def set_effect_positions(folder: str, number: int, body: EffectPositions):
     return state(p)
 
 
+@app.post("/api/projects/{folder}/scenes/{number}/effects/auto")
+def auto_effect_positions(folder: str, number: int):
+    """Forget your placements: text goes back to automatic placement, pins to the centre."""
+    from .project import default_effect_position
+    p = load(folder)
+    sc = p.scene(number)
+    if not sc or not sc.get("effects"):
+        raise HTTPException(404, "This scene has no effects")
+    counts = {}
+    for e in sc["effects"]:
+        n = counts.get(e["type"], 0)
+        counts[e["type"]] = n + 1
+        e.update(default_effect_position(e["type"], n), placed=False)
+    p.save()
+    return state(p)
+
+
+@app.get("/api/font/{name}")
+def font_file(name: str):
+    """A bundled font (for the Effects window preview)."""
+    f = (paths.FONTS_DIR / name).resolve()
+    if f.parent != paths.FONTS_DIR.resolve() or f.suffix.lower() not in (".ttf", ".otf") or not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "max-age=86400"})
+
+
 @app.get("/api/projects/{folder}/scenes/{number}/still")
 def scene_still(folder: str, number: int):
     """The scene's full picture (for placing effects). For a clip, a frame from 1 s in."""
@@ -649,7 +677,10 @@ def reset_presets():
 @app.get("/api/meta")
 def meta():
     from . import __version__
-    return {"version": __version__, "fonts": list(fonts.list_fonts().keys()), "models": MODEL_CHOICES[:2],
+    fl = fonts.list_fonts()
+    bundled = {n: Path(f).name for n, f in fl.items() if Path(f).parent.resolve() == paths.FONTS_DIR.resolve()}
+    return {"version": __version__, "fonts": list(fl.keys()), "bundled_fonts": bundled, "models": MODEL_CHOICES[:2],
+            "text_styles": effects.TEXT_STYLES,
             "projects_dir": str(paths.projects_dir()), "motion_types": presets.MOTION_TYPES,
             "transition_types": presets.TRANSITION_TYPES, "fit_modes": presets.CLIP_FIT_MODES}
 

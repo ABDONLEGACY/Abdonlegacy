@@ -195,7 +195,7 @@ table.t td.words { color: #374151; max-width: 380px; }
 .mcard .cap b { white-space: nowrap; }
 .mcard .cap span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcard .kind { position: absolute; top: 7px; left: 7px; }
-.extras { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+.extras { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-top: 18px; }
 
 /* ------------------------------------------------------------------ settings form */
 .sf-sec { border: 1px solid var(--line); border-radius: 14px; margin-bottom: 10px; overflow: hidden; }
@@ -335,3 +335,9 @@ tr.focus td, .focus { animation: flash 1.8s ease-out; }
 .sound-card { min-width: 0; }
 @media (max-width: 900px) { .fx-body { grid-template-columns: 1fr; } }
 .row-actions { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
+
+.fx-mark.text.hand { color: var(--ink); font-weight: 400; letter-spacing: 0.04em; text-shadow: none; padding: 0 0.1em;
+  -webkit-text-stroke: 0.21em var(--halo); paint-order: stroke fill; transform: translate(-50%, -50%) rotate(var(--rot));
+  filter: drop-shadow(0 0.04em 0.06em rgba(0, 0, 0, .15)); line-height: 1; }
+.fx-mark.text.hand .fx-line { position: absolute; left: 0.05em; right: -0.1em; bottom: -0.12em; height: 0.075em; background: var(--line);
+  border-radius: 1em; -webkit-text-stroke: 0; }
