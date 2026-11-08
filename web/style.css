@@ -341,3 +341,9 @@ tr.focus td, .focus { animation: flash 1.8s ease-out; }
   filter: drop-shadow(0 0.04em 0.06em rgba(0, 0, 0, .15)); line-height: 1; }
 .fx-mark.text.hand .fx-line { position: absolute; left: 0.05em; right: -0.1em; bottom: -0.12em; height: 0.075em; background: var(--line);
   border-radius: 1em; -webkit-text-stroke: 0; }
+
+#errbar { position: sticky; top: 64px; z-index: 30; }
+.erritem { display: flex; align-items: center; gap: 10px; background: #b91c1c; color: #fff; padding: 10px 24px; font-size: 13.5px; }
+.erritem .msg { flex: 1; white-space: pre-wrap; }
+.erritem .btn { color: #111; }
+.toast { cursor: pointer; }

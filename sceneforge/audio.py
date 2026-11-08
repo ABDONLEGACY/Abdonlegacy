@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 
 from . import ffmpeg_utils as ff
+from .paths import safe_unlink
 
 SR = 48000
 
@@ -19,8 +20,8 @@ def join_voice(files, out_wav):
     n = len(files)
     chains = "".join(f"[{i}:a]aresample={SR},aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}];" for i in range(n))
     concat = "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
-    args += ["-filter_complex", chains + concat, "-map", "[out]", "-c:a", "pcm_s16le", str(out_wav)]
-    ff.run(args, desc="Joining voiceover files")
+    args += ["-filter_complex", chains + concat, "-map", "[out]", "-c:a", "pcm_s16le"]
+    ff.run_to(args, out_wav, desc="Joining voiceover files")
     return ff.duration(out_wav)
 
 
@@ -51,11 +52,24 @@ class Track:
             step = SR * 60
             for i in range(0, n, step):
                 np.clip(self.data[i:min(n, i + step)], -1.0, 1.0).astype("<f4").tofile(fh)
-        ff.run(["-f", "f32le", "-ar", SR, "-ac", 2, "-i", str(raw), "-c:a", "pcm_s16le", str(out_path)],
-               desc="Writing effects track")
-        raw.unlink(missing_ok=True)
-        del self.data
-        self.path.unlink(missing_ok=True)
+        ff.run_to(["-f", "f32le", "-ar", SR, "-ac", 2, "-i", str(raw), "-c:a", "pcm_s16le"], out_path,
+                  desc="Writing effects track")
+        safe_unlink(raw)
+        self.discard()
+
+    def discard(self):
+        """Close and delete the scratch file (best effort: Windows may keep it locked for a moment)."""
+        data = getattr(self, "data", None)
+        if data is not None:
+            mm = getattr(data, "_mmap", None)
+            del self.data
+            del data
+            try:
+                if mm is not None:
+                    mm.close()
+            except Exception:
+                pass
+        safe_unlink(self.path)
 
 
 def fade(samples, fade_in_s, fade_out_s):
@@ -102,5 +116,5 @@ def final_mix(voice_wav, fx_wav, out_path, duration, music=None, music_volume=0.
         fc.append("[key]anullsink")
     fc.append("".join(mix) + f"amix=inputs={len(mix)}:normalize=0:duration=first,"
               f"atrim=0:{duration:.3f}[out]")
-    args += ["-filter_complex", ";".join(fc), "-map", "[out]", "-c:a", "aac", "-b:a", "192k", str(out_path)]
-    ff.run(args, desc="Mixing audio")
+    args += ["-filter_complex", ";".join(fc), "-map", "[out]", "-c:a", "aac", "-b:a", "192k"]
+    ff.run_to(args, out_path, desc="Mixing audio")

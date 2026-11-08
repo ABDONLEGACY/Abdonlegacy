@@ -28,6 +28,7 @@ from .motion import plan_motions
 from .sources import ImageSource, VideoSource
 from .transitions import blend, plan_transitions
 from . import effects
+from .paths import safe_replace, safe_unlink
 
 FPS = 30
 QUALITY = {"fast": ("superfast", 21), "standard": ("veryfast", 19), "high": ("medium", 17)}
@@ -280,14 +281,14 @@ class Renderer:
                 pass
             proc.kill()
             proc.wait()
-            tmp.unlink(missing_ok=True)
+            safe_unlink(tmp)
             raise
         rc = proc.wait()
         if rc != 0:
             raise ff.FFmpegError("Video encoder failed: " + proc.stderr.read().decode("utf-8", "replace")[-1500:])
         if count != expected:
             raise RuntimeError(f"Part {out_path.name}: produced {count} frames, expected {expected}")
-        tmp.replace(out_path)
+        safe_replace(tmp, out_path)
 
     def render_video(self, pieces=None, w_start=0.0, w_span=1.0):
         """Render (or reuse) all chunks of pieces, then join them. Returns path of the silent video."""
@@ -327,7 +328,7 @@ class Renderer:
         self.progress(w_start, f"Rendering {len(todo)} of {len(chunks)} parts ({reused} already done)")
         try:
             for members, out, sig, sig_file in todo:
-                sig_file.unlink(missing_ok=True)
+                safe_unlink(sig_file)
                 self.render_chunk(members, out, on_frame)
                 sig_file.write_text(sig)
         finally:
@@ -336,7 +337,7 @@ class Renderer:
             # a full render: remove leftover parts from older timings so they don't fill the disk
             for f in self.piece_dir.iterdir():
                 if f.name not in keep and not f.name.endswith(".part.mp4"):
-                    f.unlink(missing_ok=True)
+                    safe_unlink(f, tries=1)
         # join
         self.progress(w_start + w_span * 0.96, "Joining parts ...")
         listing = self.dir / ("pieces_%d.txt" % os.getpid())
@@ -346,9 +347,9 @@ class Renderer:
             lines.append(f"file '{rel}'")
         listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
         video = self.dir / "video_only.mp4"
-        ff.run(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", "-movflags", "+faststart",
-                str(video)], desc="Joining video parts")
-        listing.unlink(missing_ok=True)
+        ff.run_to(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", "-movflags", "+faststart"],
+                  video, desc="Joining video parts")
+        safe_unlink(listing)
         return video
 
     # ---- audio -------------------------------------------------------------------
@@ -359,7 +360,8 @@ class Renderer:
         voice = p.work_dir / "voice.wav"
         if not voice.exists():
             raise FileNotFoundError("Joined voiceover not found - go back to step 2 and save the voiceover again.")
-        fx = audiomod.Track(self.dir / "fx_track.npy", dur)
+        # unique scratch file: on Windows a memory-mapped file from an earlier run may still be locked
+        fx = audiomod.Track(self.dir / f"fx_track_{os.getpid()}_{int(time.time() * 1000)}.npy", dur)
         used = False
         clips = st["clips"]
         if clips.get("keep_audio"):
@@ -427,13 +429,12 @@ class Renderer:
             fx_wav = self.dir / "fx_track.wav"
             fx.to_wav(fx_wav, dur)
         else:
-            del fx.data
-            fx.path.unlink(missing_ok=True)
+            fx.discard()
         voice_in = voice
         if t0 > 0 or t1 < p.data["audio_duration"] - 1e-3:
             voice_in = self.dir / "voice_part.wav"
-            ff.run(["-ss", f"{t0:.4f}", "-t", f"{dur:.4f}", "-i", str(voice), "-c:a", "pcm_s16le", str(voice_in)],
-                   desc="Cutting voice")
+            ff.run_to(["-ss", f"{t0:.4f}", "-t", f"{dur:.4f}", "-i", str(voice), "-c:a", "pcm_s16le"], voice_in,
+                      desc="Cutting voice")
         music = p.path(p.data.get("music"))
         music = music if music and music.exists() else None
         audiomod.final_mix(voice_in, fx_wav, out_path, dur, music=music,
@@ -475,7 +476,7 @@ class Renderer:
             self.progress(0.0, "Audio unchanged - reusing it")
         else:
             self.progress(0.0, "Preparing audio (voice, clip sounds, music) ...")
-            sig_file.unlink(missing_ok=True)
+            safe_unlink(sig_file)
             self.build_audio(0.0, self.tl.N / self.fps, audio_out)
             sig_file.write_text(sig)
         video = self.render_video(w_start=0.04, w_span=0.92)
@@ -487,14 +488,14 @@ class Renderer:
         ff.run(["-i", str(video), "-i", str(audio_out), "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
                 "-movflags", "+faststart", str(tmp)], desc="Adding audio to video")
         try:
-            tmp.replace(out)
+            safe_replace(tmp, out, tries=20)
         except PermissionError:
             # The old video is open in a player (Windows locks it): save next to it under a new name.
             n = 2
             while out.with_name(f"{out.stem} ({n}).mp4").exists():
                 n += 1
             out = out.with_name(f"{out.stem} ({n}).mp4")
-            tmp.replace(out)
+            safe_replace(tmp, out)
         self.progress(1.0, f"Finished in {fmt_time(time.time() - t0)}")
         return out
 
@@ -508,9 +509,17 @@ class Renderer:
         video = self.render_video(pieces=pieces, w_start=0.0, w_span=0.85)
         audio_out = self.dir / "preview_audio.m4a"
         self.build_audio(e0 / self.fps, e1 / self.fps, audio_out)
-        out = self.p.work_dir / f"preview_scene_{number}.mp4"
+        # A new file name every time: on Windows a preview that the browser is still reading can't be
+        # overwritten. Older previews of this scene are removed when possible.
+        stamp = time.strftime("%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
+        out = self.p.work_dir / f"preview_scene_{number}_{stamp}.mp4"
+        for old in self.p.work_dir.glob(f"preview_scene_{number}_*.mp4"):
+            try:
+                old.unlink()
+            except OSError:
+                pass  # still open in the browser - it is cleaned up next time
         ff.run(["-i", str(video), "-i", str(audio_out), "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
-                "-shortest", str(out)], desc="Making preview")
+                "-shortest", "-movflags", "+faststart", str(out)], desc="Making preview")
         self.progress(1.0, "Preview ready")
         return out
 

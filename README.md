@@ -206,7 +206,10 @@ A project keeps its own copy of the settings. To change one project without chan
 | Scenes are missing media | Check the file names have the right scene numbers (see section 5), or click the red card in step 3 and choose the file. |
 | My laptop is slow | Use 1080p and quality "Standard" or "Fast". 4K takes about 4 times longer. Close other programs while rendering. A 30-minute video at 1080p takes very roughly 40-90 minutes on a laptop like the HP EliteBook 840 G5. |
 | Disk is getting full | In step 5, press **Delete temporary render files** after you're happy with the video. |
-| Something else went wrong | The error is shown in a red pop-up and in the black window. Close SceneForge and start it again. Your projects are saved after every step. |
+| Buttons on a page do nothing / Preview or Save style don't work after an update | Press **Ctrl + F5** once, so the browser loads the new page. If a **red bar** appears at the top, press **Copy** and send the message to Claude. |
+| A red message says Windows "would not let SceneForge write a file" | Another program had the file open, usually OneDrive syncing or the antivirus. SceneForge already retries for a few seconds. If your projects are in OneDrive, go to **Settings → Projects folder**, type `C:\SceneForge Projects`, and press **Use this folder**. Your projects move there. |
+| The preview window shows a problem | Press **Copy this message** and send it to Claude, or **Open the preview file** to watch it in a new tab. |
+| Something else went wrong | The error is shown in red on the page and in the black window, and written to `sceneforge_problems.log` in the SceneForge folder. Send that file to Claude. Close SceneForge and start it again. Your projects are saved after every step. |
 
 **Plug in your laptop while rendering, and turn off sleep** (Windows Settings → System → Power →
 Screen and sleep → "Never" while plugged in). Long renders keep the CPU busy, so the fan will run.

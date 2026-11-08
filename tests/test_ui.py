@@ -119,6 +119,13 @@ def main():
             shot(page, "7_review")
             page.locator("button[data-prev='4']").click()
             expect(page.locator(".overlay video")).to_be_visible(timeout=120000)
+            if page.evaluate("() => document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028\"')"):
+                # a browser with H.264 (like Chrome): the preview must really load and play
+                page.wait_for_function("() => { const v = document.querySelector('.overlay video'); return v && v.readyState >= 2 && v.videoWidth > 0; }",
+                                       timeout=30000)
+                print("preview video plays in the browser")
+            else:
+                print("(this test browser has no H.264 - set SF_CHROMIUM to Chrome to check playback)")
             shot(page, "8_preview")
             page.keyboard.press("Escape")
             print("review + preview ok")

@@ -134,7 +134,7 @@ def save_all(presets: dict) -> None:
     paths.SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     tmp = PRESETS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(presets, indent=2), encoding="utf-8")
-    tmp.replace(PRESETS_FILE)
+    paths.safe_replace(tmp, PRESETS_FILE)
 
 
 def names() -> list:

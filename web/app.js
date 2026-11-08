@@ -82,13 +82,39 @@ async function api(method, url, body) {
   return data;
 }
 
+const PAGE_VERSION = "1.3.1";  // must match sceneforge/__init__.py
+
 function toast(msg, kind = "") {
-  const t = el(`<div class="toast ${kind}">${esc(msg)}</div>`);
+  const t = el(`<div class="toast ${kind}" title="Click to close">${esc(msg)}</div>`);
+  t.onclick = () => t.remove();
   $("#toasts").appendChild(t);
-  setTimeout(() => t.remove(), kind === "err" ? 9000 : 4000);
+  // problems stay much longer (click to close), so they can't be missed
+  setTimeout(() => t.remove(), kind === "err" ? 30000 : 4000);
 }
 async function guard(fn) {
   try { return await fn(); } catch (e) { toast(e.message, "err"); console.error(e); }
+}
+
+// A red bar at the top for unexpected page problems: it stays, can be copied, and goes to the problem log.
+function showError(message, where = "") {
+  const bar = $("#errbar");
+  if (!bar) return;
+  const text = `${where ? where + ": " : ""}${message}`;
+  if ([...bar.querySelectorAll(".msg")].some((m) => m.textContent === text)) return;
+  const item = el(`<div class="erritem">${icon("alert")}<div class="msg"></div>
+    <button class="btn xs">Copy</button><button class="btn xs" title="Close">&times;</button></div>`);
+  $(".msg", item).textContent = text;
+  const [copy, close] = $$("button", item);
+  copy.onclick = () => { try { navigator.clipboard.writeText(`SceneForge ${PAGE_VERSION}: ${text}`); toast("Copied - paste it to Claude."); } catch (e) { /* no clipboard */ } };
+  close.onclick = () => item.remove();
+  bar.appendChild(item);
+  fetch("/api/problem", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: text, where }) }).catch(() => {});
+}
+window.addEventListener("error", (e) => showError(e.message || String(e.error), "Page error"));
+window.addEventListener("unhandledrejection", (e) => showError((e.reason && e.reason.message) || String(e.reason), "Page error"));
+// run one part of a page; if it breaks, show why and keep the rest of the page working
+function part(name, fn) {
+  try { return fn(); } catch (e) { console.error(e); showError(e.message, name); return null; }
 }
 
 // ----------------------------------------------------------------------------------------------- state
@@ -428,7 +454,7 @@ function mappedPanel(p) {
 }
 
 // ---- jobs ---------------------------------------------------------------------------------------
-function watchJob(job, onDone) {
+function watchJob(job, onDone, onFail) {
   S.job = job;
   const tick = async () => {
     let j;
@@ -437,6 +463,7 @@ function watchJob(job, onDone) {
     updateJobViews(j);
     if (j.status === "running") { setTimeout(tick, 700); return; }
     if (j.status === "done") { if (onDone) await onDone(j); }
+    else if (onFail) onFail(j);
     else if (j.status === "error") toast(j.error, "err");
     else if (j.status === "stopped") toast(j.message);
     updateJobViews(j);
@@ -747,10 +774,9 @@ function step4(body) {
   wrap.appendChild(side);
   body.appendChild(wrap);
   $("#s4-next", panel).onclick = () => go(5);
-  fillReview(panel);
-  const form = settingsForm(p.settings);
-  $("#proj-form", side).appendChild(form);
-  $("#pf-save", side).onclick = () => saveProjectStyle();
+  part("Review table", () => fillReview(panel));
+  part("Project style", () => $("#proj-form", side).appendChild(settingsForm(p.settings)));
+  $("#pf-save", side).onclick = () => guard(() => saveProjectStyle());
   $("#pf-reset", side).onclick = () => guard(async () => {
     S.project = await api("PATCH", `/api/projects/${encodeURIComponent(p.folder)}`, { reset_settings: true });
     $("#proj-form").innerHTML = "";
@@ -902,17 +928,41 @@ function openEffects(number, after) {
 }
 
 async function previewScene(number) {
-  await guard(async () => {
+  const folder = S.project.folder;
+  const m = modal(`<div class="modal video"><div class="modal-h"><div class="mi">${icon("play")}</div>
+    <div><h3>Scene ${number} preview</h3><p>Small and quick, with its transitions in and out.</p></div><button class="x" data-x>&times;</button></div>
+    <div class="modal-b" id="pv-body"><div id="preview-progress" class="job"><div class="progress"><div style="width:0%"></div></div><div class="msg">Starting ...</div></div></div></div>`);
+  const body = () => $("#pv-body", m);
+  const problem = (title, detail, fileUrl) => {
+    const b = body();
+    if (!b) return;
+    b.innerHTML = `<div class="notice err" style="margin:0">${icon("alert")}<div><b>${esc(title)}</b><br>${esc(detail)}
+      <div class="row" style="margin-top:10px;flex-wrap:wrap">
+        ${fileUrl ? `<a class="btn sm" href="${fileUrl}" target="_blank" rel="noopener">${icon("open")} Open the preview file</a>` : ""}
+        <button class="btn sm" id="pv-retry">${icon("refresh")} Try again</button>
+        <button class="btn sm" id="pv-copy">${icon("copy")} Copy this message</button></div></div></div>`;
+    fillIcons(b);
+    $("#pv-retry", b).onclick = () => previewScene(number);
+    $("#pv-copy", b).onclick = () => { try { navigator.clipboard.writeText(`${title}\n${detail}`); toast("Copied."); } catch (e) { /* no clipboard */ } };
+  };
+  try {
     if ($("#proj-form .sf")) await saveProjectStyle(true);
-    const job = await api("POST", `/api/projects/${encodeURIComponent(S.project.folder)}/preview/${number}`);
-    const m = modal(`<div class="modal video"><div class="modal-h"><div class="mi">${icon("play")}</div>
-      <div><h3>Scene ${number} preview</h3><p>Small and quick, with its transitions in and out.</p></div><button class="x" data-x>&times;</button></div>
-      <div class="modal-b" id="pv-body"><div id="preview-progress" class="job"><div class="progress"><div style="width:0%"></div></div><div class="msg">Starting ...</div></div></div></div>`);
+    const job = await api("POST", `/api/projects/${encodeURIComponent(folder)}/preview/${number}`);
     watchJob(job, (j) => {
-      const b = $("#pv-body", m);
-      if (b) b.innerHTML = `<video class="video-out" controls autoplay src="/api/projects/${encodeURIComponent(S.project.folder)}/file/${j.result.file}?v=${j.result.v}"></video>`;
-    });
-  });
+      const b = body();
+      if (!b) return;
+      const url = `/api/projects/${encodeURIComponent(folder)}/file/${j.result.file.split("/").map(encodeURIComponent).join("/")}?v=${j.result.v}`;
+      b.innerHTML = `<video class="video-out" controls autoplay playsinline src="${url}"></video>
+        <div class="help" style="margin-top:8px">Not playing? <a href="${url}" target="_blank" rel="noopener">Open the preview in a new tab</a>.</div>`;
+      const v = $("video", b);
+      v.addEventListener("error", () => problem("Your browser could not play the preview video.",
+        `Video error ${v.error ? v.error.code : "?"}. Try "Open the preview file", or render the scene with Export and open it from the output folder.`, url));
+      v.play().catch(() => { /* autoplay blocked: the play button is shown */ });
+    }, (j) => problem(j.status === "stopped" ? "The preview was stopped." : "The preview could not be made.",
+      j.error || j.message || "Unknown problem."));
+  } catch (e) {
+    problem("The preview could not start.", e.message);
+  }
 }
 
 // ---- step 5: export -----------------------------------------------------------------------------
@@ -1358,10 +1408,25 @@ async function showSettings() {
           <b>Render stopped?</b> Press Render again - it continues where it left off.<br>
           <b>Scene effects:</b> put <code>[PIN]</code>, <code>[PIN: Rome]</code> or <code>[TEXT: 1940]</code> right before the word that should trigger it.</div></div>
     </div>
+    <div class="card" style="margin-top:20px"><div class="card-h"><h2>${icon("folder")} Projects folder</h2>
+      <p>Where SceneForge keeps your projects (inputs, settings, timings and videos).</p></div>
+      <div class="card-b">
+        ${/onedrive/i.test(m.projects_dir || "") ? `<div class="notice warn">${icon("alert")}<div>Your projects are inside <b>OneDrive</b>. OneDrive syncing can lock files while SceneForge saves or renders, and it uploads gigabytes of temporary render files. A folder outside OneDrive, like <code>C:\\SceneForge Projects</code>, works better.</div></div>` : ""}
+        <div class="row"><input class="input" id="pd-path" value="${esc(m.projects_dir || "")}"><button class="btn" style="flex:0 0 auto" id="pd-save">${icon("save")} Use this folder</button></div>
+        <label class="toggle" style="margin-top:12px"><input type="checkbox" id="pd-move" checked><span class="sw"></span>Move my existing projects there</label>
+        <div class="help">Problem log (send it to Claude if something goes wrong): <code>${esc(m.problem_log || "")}</code></div>
+      </div></div>
     <div class="card" style="margin-top:20px"><div class="card-h"><h2>${icon("pin")} Effect sounds</h2>
       <p>One sound for every pin drop and one for every text pop, used in all projects. Each plays exactly on its word.</p></div>
       <div class="card-b"><div class="extras" id="fx-sounds" style="margin-top:0"></div></div></div>`;
   fillIcons(view);
+  $("#pd-save").onclick = () => guard(async () => {
+    const r = await api("POST", "/api/settings/projects-dir", { path: $("#pd-path").value.trim(), move: $("#pd-move").checked });
+    S.meta = await api("GET", "/api/meta");
+    S.project = null;
+    toast(`Projects folder: ${r.projects_dir}${r.moved ? ` (${r.moved} project(s) moved)` : ""}`, "ok");
+    showSettings();
+  });
   renderEffectSounds();
 }
 
@@ -1427,6 +1492,18 @@ window.go = go;
   fillIcons(document);
   try {
     S.meta = await api("GET", "/api/meta");
+    if (S.meta.version !== PAGE_VERSION) {
+      // the browser kept an old copy of this page after an update: fetch the new one once
+      let tried = null;
+      try { tried = sessionStorage.getItem("sf-reloaded"); } catch (e) { /* ignore */ }
+      if (tried !== S.meta.version) {
+        try { sessionStorage.setItem("sf-reloaded", S.meta.version); } catch (e) { /* ignore */ }
+        await Promise.all(["/", "/app.js", "/style.css"].map((u) => fetch(u, { cache: "reload" }).catch(() => {})));
+        location.reload();
+        return;
+      }
+      showError(`This page is version ${PAGE_VERSION} but SceneForge is ${S.meta.version}. Press Ctrl+F5 to load the new page.`, "Old page");
+    }
     const faces = Object.entries(S.meta.bundled_fonts || {}).map(([n, f]) => `@font-face { font-family: '${n}'; src: url('/api/font/${encodeURIComponent(f)}'); }`).join("\n");
     document.head.appendChild(el(`<style>${faces}</style>`));
     $("#version").textContent = `SceneForge ${S.meta.version} · local`;

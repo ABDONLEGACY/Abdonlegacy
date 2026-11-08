@@ -121,7 +121,7 @@ class Project:
         self.dir.mkdir(parents=True, exist_ok=True)
         tmp = self.dir / (PROJECT_FILE + ".tmp")
         tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-        tmp.replace(self.dir / PROJECT_FILE)
+        paths.safe_replace(tmp, self.dir / PROJECT_FILE)
 
     @staticmethod
     def list_all():

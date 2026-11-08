@@ -22,6 +22,35 @@ from .transcribe import MODEL_CHOICES
 
 WEB_DIR = paths.APP_DIR / "web"
 app = FastAPI(title="SceneForge", docs_url=None, redoc_url=None, openapi_url=None)
+LOG_FILE = paths.APP_DIR / "sceneforge_problems.log"
+
+
+def log_problem(where, exc=None):
+    """Keep a small problem log next to the program, so problems can be reported."""
+    try:
+        text = traceback.format_exc() if exc is not None else ""
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 2_000_000:
+            LOG_FILE.write_text("")
+        with open(LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(f"\n=== {stamp}  {where}\n{text}")
+    except Exception:
+        pass
+
+
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """The browser must always ask for the newest page code (after an update it could otherwise keep
+    using an old copy that doesn't match the new program)."""
+    try:
+        response = await call_next(request)
+    except Exception as e:  # noqa: BLE001
+        log_problem(f"{request.method} {request.url.path}", e)
+        return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+    path = request.url.path
+    if not path.startswith("/api/") or path.startswith("/api/meta"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 
 class UserError(Exception):
@@ -31,6 +60,27 @@ class UserError(Exception):
 @app.exception_handler(UserError)
 async def _user_error(_req, exc):
     return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.exception_handler(PermissionError)
+async def _locked(req, exc):
+    log_problem(f"{req.method} {req.url.path} - file locked", exc)
+    return JSONResponse({"error": "Windows would not let SceneForge write a file, because another program had it "
+                                  f"open ({getattr(exc, 'filename', '') or exc}). If your projects are in a OneDrive "
+                                  "folder, pause OneDrive syncing or move the projects folder (Settings), then try again."},
+                        status_code=500)
+
+
+class ClientProblem(BaseModel):
+    message: str
+    where: str = ""
+
+
+@app.post("/api/problem")
+def client_problem(body: ClientProblem):
+    """Errors that happen in the browser page are written to the problem log too."""
+    log_problem(f"page error ({body.where}): {body.message[:2000]}")
+    return {"log": str(LOG_FILE)}
 
 
 @app.exception_handler(ValueError)
@@ -72,6 +122,7 @@ def start_job(kind, folder, fn):
             job["message"] = "Stopped. Press Render again to continue where it left off."
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
+            log_problem(f"{kind} of '{folder}'", e)
             job["status"] = "error"
             job["error"] = str(e)[:2000] or e.__class__.__name__
         job["finished"] = time.time()
@@ -629,8 +680,11 @@ def clean(folder: str):
     for d in p.work_dir.iterdir():
         if d.is_dir() and (d.name.startswith(("render_", "clips_")) or d.name == "thumbs"):
             shutil.rmtree(d, ignore_errors=True)
-    for f in p.work_dir.glob("preview_scene_*.mp4"):
-        f.unlink(missing_ok=True)
+    for f in list(p.work_dir.glob("preview_scene_*.mp4")) + list(p.work_dir.glob("render_*/fx_track_*.npy")):
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            pass
     return {"ok": True}
 
 
@@ -674,13 +728,40 @@ def reset_presets():
     return presets.load_all()
 
 
+class ProjectsDirBody(BaseModel):
+    path: str
+    move: bool = True
+
+
+@app.post("/api/settings/projects-dir")
+def set_projects_dir(body: ProjectsDirBody):
+    """Change where projects are kept (optionally moving the existing projects there)."""
+    if _running_job():
+        raise UserError("Please wait until SceneForge has finished the current job.")
+    new = Path(body.path.strip().strip('"')).expanduser()
+    if not body.path.strip() or not new.is_absolute():
+        raise UserError("Type a full folder path, for example C:\\SceneForge Projects")
+    old = paths.projects_dir()
+    new.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    if body.move and new.resolve() != old.resolve():
+        for d in old.iterdir():
+            if (d / "project.json").exists() and not (new / d.name).exists():
+                shutil.move(str(d), str(new / d.name))
+                moved += 1
+    data = paths.load_app_settings()
+    data["projects_dir"] = str(new)
+    paths.save_app_settings(data)
+    return {"projects_dir": str(new), "moved": moved}
+
+
 @app.get("/api/meta")
 def meta():
     from . import __version__
     fl = fonts.list_fonts()
     bundled = {n: Path(f).name for n, f in fl.items() if Path(f).parent.resolve() == paths.FONTS_DIR.resolve()}
     return {"version": __version__, "fonts": list(fl.keys()), "bundled_fonts": bundled, "models": MODEL_CHOICES[:2],
-            "text_styles": effects.TEXT_STYLES,
+            "text_styles": effects.TEXT_STYLES, "problem_log": str(LOG_FILE),
             "projects_dir": str(paths.projects_dir()), "motion_types": presets.MOTION_TYPES,
             "transition_types": presets.TRANSITION_TYPES, "fit_modes": presets.CLIP_FIT_MODES}
 

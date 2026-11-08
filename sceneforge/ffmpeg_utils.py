@@ -22,6 +22,21 @@ def run(args, desc="ffmpeg"):
     return proc
 
 
+def run_to(args, out_path, desc="ffmpeg"):
+    """Run ffmpeg writing to a temporary file, then swap it into place (safe if Windows has the old file
+    locked for a moment, and never leaves a half-written file behind)."""
+    import os
+    from pathlib import Path
+    out_path = Path(out_path)
+    tmp = out_path.with_name(f"{out_path.stem}.part{os.getpid()}{out_path.suffix}")
+    try:
+        run(list(args) + [str(tmp)], desc=desc)
+        paths.safe_replace(tmp, out_path)
+    finally:
+        paths.safe_unlink(tmp, tries=1)
+    return out_path
+
+
 def popen(args, stdin=None, stdout=None):
     cmd = [paths.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y"] + [str(a) for a in args]
     return subprocess.Popen(cmd, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE,

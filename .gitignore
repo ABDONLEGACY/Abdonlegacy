@@ -8,3 +8,4 @@ models/
 settings/
 sample/
 *.log
+sceneforge_problems.log

@@ -62,3 +62,34 @@ def ffmpeg() -> str:
 
 def ffprobe() -> str:
     return _find_tool("ffprobe")
+
+
+def safe_replace(src, dst, tries=40, wait=0.15):
+    """Move src over dst. On Windows a file can be locked for a moment (OneDrive syncing, antivirus
+    scanning, a video player); retry for a few seconds instead of failing."""
+    import time
+    src, dst = Path(src), Path(dst)
+    for i in range(tries):
+        try:
+            src.replace(dst)
+            return dst
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(wait)
+    return dst
+
+
+def safe_unlink(path, tries=10, wait=0.1):
+    """Delete a file if possible; a file Windows keeps locked is left for later (never an error)."""
+    import time
+    path = Path(path)
+    for _ in range(tries):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except PermissionError:
+            time.sleep(wait)
+        except OSError:
+            return False
+    return False

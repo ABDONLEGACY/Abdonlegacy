@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from . import ffmpeg_utils as ff
+from .paths import safe_replace
 from .motion import camera_at
 
 INTERP = cv2.INTER_LINEAR
@@ -149,7 +150,7 @@ class VideoSource:
         ff.run(["-i", str(self.path), "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "12",
                 "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
                 "-f", "mp4", str(tmp)], desc=f"Preparing clip {self.path.name}")
-        tmp.replace(self.conform)
+        safe_replace(tmp, self.conform)
 
     def _decode(self, a, b):
         """Yield real frames a..b-1 (0 <= a < b <= L) as BGR arrays."""
@@ -197,7 +198,7 @@ class VideoSource:
             mm[i] = fr
         mm.flush()
         del mm
-        tmp.replace(f)
+        safe_replace(tmp, f)
         self._tail_mm = np.load(f, mmap_mode="r")
         return self._tail_mm
 
