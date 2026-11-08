@@ -10,6 +10,8 @@ Timing (T = measured start of the trigger word):
 Both stay until the scene ends and leave with the scene's transition. Sounds play at T.
 """
 import math
+import os
+import threading
 
 import cv2
 import numpy as np
@@ -48,20 +50,22 @@ def tilt_for(seed, scene_number, i):
     return round(random.Random(f"{seed}:{scene_number}:{i}:tilt").uniform(*TILT_RANGE), 3)
 
 
-def resolve(project, words=None, auto=True):
+def resolve(project, words=None, auto=True, compute=True, only=None):
     """{scene number: [effect, ...]} with each effect's position, tilt and trigger time "t" (seconds, measured
     from the audio; None until the scenes are synced). Text you haven't placed yourself is put automatically
-    in the emptiest part of the picture."""
+    in the emptiest part of the picture.
+
+    compute=False only uses positions already worked out (fast, for page loads); only = scene numbers to do."""
     words = project.words() if words is None else words
     by_scene = {}
     for w in words:
         by_scene.setdefault(w["scene"], []).append(w)
     style = {**DEFAULT_STYLE, **(project.settings.get("effects") or {})}
-    placer = AutoPlacer(project, style) if auto else None
+    placer = AutoPlacer(project, style, compute=compute) if auto else None
     out = {}
     for si, sc in enumerate(project.scenes):
         effects = sc.get("effects") or []
-        if not effects:
+        if not effects or (only is not None and sc["number"] not in only):
             continue
         sw = by_scene.get(si, [])
         items = []
@@ -224,16 +228,39 @@ def _over(top, bottom):
     return top + bottom * (1.0 - top[..., 3:4])
 
 
+_HAND_CACHE = {}
+
+
 def hand_text_sprite(text, font_name, size, ink="#262523", halo="#F5F2EA", line="#C34D48", seed="",
                      weight=0.02, halo_width=0.17, underline=True, tracking=0.07):
     """Hand-lettered comic caption: CAPITALS, every letter slightly rotated / lifted like inked by hand,
     thickened strokes, a thick sticker-like halo, an almost invisible shadow and a red marker underline.
 
     Returns {"text": sprite, "line": sprite (same canvas), "anchor": (cx, cy), "line_x": (x0, x1), "feather": px}.
+    Results are remembered, so the same text is only drawn once.
     """
+    key = (text, font_name, round(float(size), 2), ink, halo, line, str(seed), weight, halo_width, bool(underline),
+           tracking)
+    if key not in _HAND_CACHE:
+        if len(_HAND_CACHE) > 64:
+            _HAND_CACHE.clear()
+        _HAND_CACHE[key] = _draw_hand_text(text, font_name, size, ink, halo, line, seed, weight, halo_width,
+                                           underline, tracking)
+    return _HAND_CACHE[key]
+
+
+def _grow(mask, radius):
+    """Round, anti-aliased outward growth of a coverage mask by `radius` px (one distance map, any radius)."""
+    inside = (mask >= 0.5).astype(np.uint8)
+    dist = cv2.distanceTransform(1 - inside, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return np.maximum(mask, np.clip(radius + 0.5 - dist, 0.0, 1.0))
+
+
+def _draw_hand_text(text, font_name, size, ink, halo, line, seed, weight, halo_width, underline, tracking):
     import random
+    Q = 2  # drawn at 2x and shrunk: smooth edges at a fraction of the cost of 4x
     text = " ".join(text.upper().split())
-    big = max(10, int(round(size * SS)))
+    big = max(10, int(round(size * Q)))
     font = fonts.load(font_name, big)
     hb = font.getbbox("H")
     cap = max(4, hb[3] - hb[1])
@@ -263,11 +290,9 @@ def hand_text_sprite(text, font_name, size, ink="#262523", halo="#F5F2EA", line=
         l, _t, r, _b = font.getbbox(ch)
         first_left = x + l if first_left is None else first_left
         last_right = x + r
-    ink_m = cv2.dilate(mask, _disk(wpx)) if wpx >= 1 else mask                 # bolder, rounder strokes
-    halo_m = cv2.GaussianBlur(cv2.dilate(ink_m, _disk(hpx)), (0, 0), SS * 0.7)  # sticker halo
-    shadow_m = np.roll(cv2.GaussianBlur(halo_m, (0, 0), cap * 0.10), int(cap * 0.05), axis=0) * 0.16
+    ink_m = _grow(mask, wpx) if wpx >= 0.5 else mask                      # bolder, rounder strokes
+    halo_m = cv2.GaussianBlur(_grow(ink_m, hpx), (0, 0), Q * 0.7)          # sticker halo
     out = _over(_layer(ink_m, hex_to_rgb(ink, (38, 37, 35))), _layer(halo_m, hex_to_rgb(halo, (245, 242, 234))))
-    out = _over(out, _layer(shadow_m, (0, 0, 0)))
     baseline = pad + asc
     line_img = np.zeros_like(out)
     lx0 = lx1 = 0.0
@@ -294,13 +319,18 @@ def hand_text_sprite(text, font_name, size, ink="#262523", halo="#F5F2EA", line=
         line_m = lm.astype(np.float32) / 255.0 * 0.96
         line_img = _layer(line_m, hex_to_rgb(line, (195, 77, 72)))
     # back to output resolution
-    small = (max(1, Wc // SS), max(1, Hc // SS))
+    small = (max(1, Wc // Q), max(1, Hc // Q))
     text_s = cv2.resize(out, small, interpolation=cv2.INTER_AREA)
     line_s = cv2.resize(line_img, small, interpolation=cv2.INTER_AREA)
-    bbox_x0, bbox_x1 = (first_left or pad) / SS, (last_right or pad) / SS
-    anchor = ((bbox_x0 + bbox_x1) / 2, (pad + asc - cap / 2) / SS)
-    return {"text": text_s, "line": line_s, "anchor": anchor, "line_x": (lx0 / SS, lx1 / SS),
-            "feather": max(1.5, cap * 0.08 / SS), "cap": cap / SS,
+    # the almost invisible soft shadow, made at final size (cheap)
+    cap_s = cap / Q
+    sh = cv2.GaussianBlur(text_s[..., 3], (0, 0), max(0.8, cap_s * 0.10))
+    sh = np.roll(sh, max(1, int(cap_s * 0.05)), axis=0) * 0.16
+    text_s = _over(text_s, _layer(sh, (0, 0, 0)))
+    bbox_x0, bbox_x1 = (first_left or pad) / Q, (last_right or pad) / Q
+    anchor = ((bbox_x0 + bbox_x1) / 2, (pad + asc - cap / 2) / Q)
+    return {"text": text_s, "line": line_s, "anchor": anchor, "line_x": (lx0 / Q, lx1 / Q),
+            "feather": max(1.5, cap * 0.08 / Q), "cap": cap_s,
             "extent": _extent(np.maximum(text_s[..., 3], line_s[..., 3]), anchor)}
 
 
@@ -490,15 +520,18 @@ def hand_layers(text, st, W, H, seed=""):
     """Hand-lettered text + underline sprites for a W x H frame. Long text shrinks to fit the safe area."""
     unit = min(W, H) / 1080.0
     size = float(st.get("hand_size", 150)) * unit
-    for _ in range(4):
-        L = hand_text_sprite(text, st.get("hand_font", "Itim"), size, ink=st.get("hand_color", "#262523"),
-                             halo=st.get("hand_halo", "#F5F2EA"), line=st.get("underline_color", "#C34D48"),
-                             seed=seed, underline=bool(st.get("underline", True)))
-        maxw = W * (1 - 2 * SAFE) * 0.94
-        width = L["extent"][2] - L["extent"][0]
-        if width <= maxw:
-            break
-        size *= maxw / width
+    kw = dict(ink=st.get("hand_color", "#262523"), halo=st.get("hand_halo", "#F5F2EA"),
+              line=st.get("underline_color", "#C34D48"), seed=seed, underline=bool(st.get("underline", True)))
+    font = st.get("hand_font", "Itim")
+    maxw = W * (1 - 2 * SAFE) * 0.94
+    # a tiny trial drawing tells how wide the text will be, so the real one is drawn only once
+    probe = hand_text_sprite(text, font, 40, **kw)["extent"]
+    width = (probe[2] - probe[0]) * size / 40
+    if width > maxw:
+        size *= maxw / width * 0.99
+    L = dict(hand_text_sprite(text, font, size, **kw))
+    if L["extent"][2] - L["extent"][0] > maxw * 1.02:  # rare: rounding - shrink once more
+        L = dict(hand_text_sprite(text, font, size * maxw / (L["extent"][2] - L["extent"][0]), **kw))
     L["has_line"] = bool(st.get("underline", True))
     return L
 
@@ -541,9 +574,9 @@ class AutoPlacer:
 
     VERSION = 2
 
-    def __init__(self, project, style):
+    def __init__(self, project, style, compute=True):
         import json
-        self.p, self.st = project, style
+        self.p, self.st, self.compute = project, style, compute
         self.file = project.work_dir / "auto_place.json"
         try:
             self.cache = json.loads(self.file.read_text()) if self.file.exists() else {}
@@ -557,7 +590,16 @@ class AutoPlacer:
     def save(self):
         import json
         if self.dirty:
-            self.file.write_text(json.dumps(self.cache))
+            # re-read and merge, then write atomically: a page load and a preview may save at the same time
+            try:
+                disk = json.loads(self.file.read_text()) if self.file.exists() else {}
+            except Exception:
+                disk = {}
+            disk.update(self.cache)
+            tmp = self.file.with_name(f"auto_place.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(json.dumps(disk))
+            from .paths import safe_replace
+            safe_replace(tmp, self.file)
             self.dirty = False
 
     def plans(self):
@@ -589,6 +631,8 @@ class AutoPlacer:
         # several texts in one scene: avoid the ones already placed
         key += f"-{item['i']}"
         if key not in self.cache:
+            if not self.compute:
+                return None  # not worked out yet (done when the Effects window opens or when rendering)
             self.cache[key] = self._compute(mp, kind, plan, item, cap, self.taken.get(si, []))
             self.dirty = True
         x, y, bw, bh, cx, cy = self.cache[key]
@@ -603,7 +647,9 @@ class AutoPlacer:
             dur = ff.duration(mp)
             proc = ff.popen(["-ss", f"{min(1.0, dur / 2):.2f}", "-i", str(mp), "-frames:v", "1", "-vf", "scale=640:-2",
                              "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE)
-            raw, _ = proc.communicate()
+            raw = proc.stdout.read()
+            proc.stdout.close()
+            proc.wait()
             info = ff.video_info(mp)
             h = int(round(640 * info["height"] / max(1, info["width"]) / 2) * 2)
             return np.frombuffer(raw, np.uint8)[:640 * h * 3].reshape(h, 640, 3).copy()

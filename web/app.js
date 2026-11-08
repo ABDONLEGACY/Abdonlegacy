@@ -82,7 +82,7 @@ async function api(method, url, body) {
   return data;
 }
 
-const PAGE_VERSION = "1.3.1";  // must match sceneforge/__init__.py
+const PAGE_VERSION = "1.3.2";  // must match sceneforge/__init__.py
 
 function toast(msg, kind = "") {
   const t = el(`<div class="toast ${kind}" title="Click to close">${esc(msg)}</div>`);
@@ -823,18 +823,22 @@ function fillReview(panel) {
     if (inp.files.length) swapMedia(parseInt(inp.dataset.swap, 10), inp.files[0], () => fillReview(panel));
   }));
   $$("button[data-prev]", panel).forEach((b) => (b.onclick = () => previewScene(parseInt(b.dataset.prev, 10))));
-  $$("button[data-fx]", panel).forEach((b) => (b.onclick = () => openEffects(parseInt(b.dataset.fx, 10), () => fillReview(panel))));
+  $$("button[data-fx]", panel).forEach((b) => (b.onclick = () => guard(() => openEffects(parseInt(b.dataset.fx, 10), () => fillReview(panel)))));
 }
 
 // ---- scene effects: place pins and text on the picture ---------------------------------------
 const PIN_SVG = `<svg viewBox="0 0 36 50" class="pin-svg"><path d="M18 49C18 49 34 30 34 17A16 16 0 1 0 2 17C2 30 18 49 18 49Z" fill="var(--pin)" stroke="rgba(0,0,0,.35)" stroke-width="1.5"/><circle cx="18" cy="17" r="6.5" fill="#fff"/></svg>`;
 
-function openEffects(number, after) {
+async function openEffects(number, after) {
   const p = S.project;
   const sc = p.scenes.find((x) => x.number === number);
   if (!sc || !(sc.effects || []).length) return;
   if (!sc.media) return toast("Add an image or clip for this scene first (step 3).", "err");
-  const fx = sc.effects.map((e) => ({ ...e }));
+  // this scene's automatic text positions are worked out now (page loads only read remembered ones)
+  let fresh = sc.effects;
+  try { fresh = (await api("GET", `/api/projects/${encodeURIComponent(p.folder)}/scenes/${number}/effects`)).effects; }
+  catch (e) { showError(e.message, "Effects window"); }
+  const fx = fresh.map((e) => ({ ...e }));
   const style = (p.settings.effects || {});
   let sel = fx.findIndex((e) => !e.placed);
   if (sel < 0) sel = 0;

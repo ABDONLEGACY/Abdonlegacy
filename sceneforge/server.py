@@ -204,7 +204,8 @@ def state(p: Project):
     d = p.data
     synced = bool(d.get("sync", {}).get("done"))
     tl = {r["number"]: r for r in p.timeline()} if p.scenes else {}
-    fx_times = effects.resolve(p) if any(s.get("effects") for s in p.scenes) else {}
+    # page loads only read positions already worked out (never the slow automatic placement)
+    fx_times = effects.resolve(p, compute=False) if any(s.get("effects") for s in p.scenes) else {}
     scenes = []
     for s in p.scenes:
         mp = p.path(s.get("media"))
@@ -500,9 +501,18 @@ def preview(folder: str, number: int):
     def work(progress):
         pp = load(folder)
         size = (640, 360) if pp.data["aspect"] != "9:16" else (360, 640)
-        out = Renderer(pp, quality="fast", size=size, tag="preview", progress=progress).preview(number)
+        progress(0.01, "Preparing the scene ...")
+        out = Renderer(pp, quality="fast", size=size, tag="preview", progress=progress, focus=number).preview(number)
         return {"file": pp.rel(out), "v": int(time.time())}
 
+    # a new preview replaces one that is still running (instead of "busy")
+    busy = _running_job()
+    if busy and busy["kind"] == "preview":
+        render.STOP.set()
+        for _ in range(100):
+            if busy["status"] != "running":
+                break
+            time.sleep(0.1)
     return start_job("preview", folder, work)
 
 
@@ -524,6 +534,17 @@ def set_effect_positions(folder: str, number: int, body: EffectPositions):
         e["placed"] = True
     p.save()
     return state(p)
+
+
+@app.get("/api/projects/{folder}/scenes/{number}/effects")
+def scene_effects(folder: str, number: int):
+    """One scene's effects with their automatic positions worked out (for the Effects window)."""
+    p = load(folder)
+    sc = p.scene(number)
+    if not sc or not sc.get("effects"):
+        raise HTTPException(404, "This scene has no effects")
+    resolved = effects.resolve(p, only={number}).get(number, [])
+    return {"effects": effect_info(sc, resolved)}
 
 
 @app.post("/api/projects/{folder}/scenes/{number}/effects/auto")

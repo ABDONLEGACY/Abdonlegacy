@@ -38,9 +38,36 @@ def run_to(args, out_path, desc="ffmpeg"):
 
 
 def popen(args, stdin=None, stdout=None):
+    """Start ffmpeg in the background. Its messages are read continuously by a helper thread: on Windows a
+    pipe only holds a few kilobytes, and an unread message pipe would make ffmpeg (and SceneForge) wait
+    for each other forever."""
+    import threading
     cmd = [paths.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y"] + [str(a) for a in args]
-    return subprocess.Popen(cmd, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE,
+    proc = subprocess.Popen(cmd, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE,
                             creationflags=_CREATE_FLAGS)
+    tail = bytearray()
+    proc.err_tail = tail
+    pipe = proc.stderr
+
+    def drain():
+        try:
+            for chunk in iter(lambda: pipe.read(4096), b""):
+                tail.extend(chunk)
+                del tail[:-8000]
+        except Exception:
+            pass
+
+    proc.err_thread = threading.Thread(target=drain, daemon=True)
+    proc.err_thread.start()
+    return proc
+
+
+def stderr_text(proc):
+    """The last messages an ffmpeg started with popen() wrote."""
+    t = getattr(proc, "err_thread", None)
+    if t is not None:
+        t.join(timeout=2)
+    return bytes(getattr(proc, "err_tail", b"")).decode("utf-8", "replace")[-1500:]
 
 
 def probe(path):

@@ -9,6 +9,23 @@ import webbrowser
 # Nothing leaves this computer: no usage statistics from the speech-model library.
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")  # no warning spam in the black window
+
+
+def disable_quickedit():
+    """Windows: clicking inside the black SceneForge window starts "QuickEdit" text selection, which PAUSES
+    the program until a key is pressed (previews and renders seem to hang). Switch that mode off."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.GetStdHandle(-10)  # console input
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            k32.SetConsoleMode(handle, (mode.value & ~0x0040) | 0x0080)  # QuickEdit off, keep extended flags
+    except Exception:
+        pass
 
 
 def free_port(preferred=7860):
@@ -23,6 +40,7 @@ def free_port(preferred=7860):
 
 
 def main():
+    disable_quickedit()
     import uvicorn
     from sceneforge.server import app
 

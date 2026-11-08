@@ -53,7 +53,7 @@ def fmt_time(s):
 class Timeline:
     """All frame-exact decisions for a render: scene boundaries, transitions, motions, pieces."""
 
-    def __init__(self, project, W, H, fps=FPS):
+    def __init__(self, project, W, H, fps=FPS, focus=None):
         self.p, self.W, self.H, self.fps = project, W, H, fps
         st = project.settings
         tl = project.timeline()
@@ -96,7 +96,13 @@ class Timeline:
                 image_scenes.add(num)
         self.motions = plan_motions(self.numbers, image_scenes, st, seed)
         # {scene number: [pin / text effects with position, tilt and trigger time]} - only synced effects render
-        self.effects = {n: [e for e in items if e["t"] is not None] for n, items in effects.resolve(project).items()}
+        # a preview only needs the effects of the previewed scene and its neighbours (transitions)
+        only = None
+        if focus is not None and focus in self.numbers:
+            k = self.numbers.index(focus)
+            only = set(self.numbers[max(0, k - 1):k + 2])
+        self.effects = {n: [e for e in items if e["t"] is not None]
+                        for n, items in effects.resolve(project, only=only).items()}
         self.effects = {n: items for n, items in self.effects.items() if items}
         # pieces
         self.pieces = []
@@ -147,14 +153,14 @@ class EffectSource:
 
 
 class Renderer:
-    def __init__(self, project, resolution=None, quality=None, progress=None, size=None, tag=None):
+    def __init__(self, project, resolution=None, quality=None, progress=None, size=None, tag=None, focus=None):
         self.p = project
         self.resolution = resolution or project.data.get("render", {}).get("resolution", "1080p")
         self.quality = quality or project.data.get("render", {}).get("quality", "standard")
         self.W, self.H = size or project.size(self.resolution)
         self.fps = FPS
         self.progress = progress or (lambda f, m: None)
-        self.tl = Timeline(project, self.W, self.H, self.fps)
+        self.tl = Timeline(project, self.W, self.H, self.fps, focus=focus)
         self.tag = tag or f"{self.W}x{self.H}"
         self.dir = project.work_dir / f"render_{self.tag}"
         self.piece_dir = self.dir / "pieces"
@@ -273,7 +279,7 @@ class Renderer:
             proc.stdin.close()
         except (BrokenPipeError, OSError):
             proc.wait()
-            raise ff.FFmpegError("Video encoder stopped: " + proc.stderr.read().decode("utf-8", "replace")[-1500:])
+            raise ff.FFmpegError("Video encoder stopped: " + ff.stderr_text(proc))
         except BaseException:
             try:
                 proc.stdin.close()
@@ -285,7 +291,7 @@ class Renderer:
             raise
         rc = proc.wait()
         if rc != 0:
-            raise ff.FFmpegError("Video encoder failed: " + proc.stderr.read().decode("utf-8", "replace")[-1500:])
+            raise ff.FFmpegError("Video encoder failed: " + ff.stderr_text(proc))
         if count != expected:
             raise RuntimeError(f"Part {out_path.name}: produced {count} frames, expected {expected}")
         safe_replace(tmp, out_path)
