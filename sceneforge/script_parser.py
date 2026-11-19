@@ -10,8 +10,17 @@ SCENE_RE = re.compile(
 # Things in [square brackets] or {curly braces} are treated as notes, not narration.
 NOTE_RE = re.compile(r"\[[^\]]*\]|\{[^}]*\}")
 MD_RE = re.compile(r"(\*\*|__|`|^#+\s*|^>\s*)", re.MULTILINE)
-# Scene effect markers, placed right before the word that triggers them: [PIN], [PIN: Rome], [TEXT: 1940]
-EFFECT_RE = re.compile(r"\[\s*(PIN|TEXT)\s*(?::\s*([^\]]*?))?\s*\]", re.IGNORECASE)
+# Scene effect markers, placed right before the word that triggers them: [PIN], [PIN: Rome], [TEXT: 1940],
+# [STAMP: FOUNDED], [TYPE: Jensen Huang], [NOTE: 100 push-ups a night], [CIRCLE], [SHAKE],
+# [QUOTE: I wish upon you pain and suffering | Jensen Huang]
+EFFECT_KINDS = ("PIN", "TEXT", "STAMP", "TYPE", "NOTE", "CIRCLE", "QUOTE", "SHAKE")
+NEEDS_WORDS = {"text": "[TEXT: 1940]", "stamp": "[STAMP: FOUNDED]", "type": "[TYPE: Jensen Huang]",
+               "note": "[NOTE: 100 push-ups a night]", "quote": "[QUOTE: the words | who said them]"}
+EFFECT_RE = re.compile(r"\[\s*(" + "|".join(EFFECT_KINDS) + r")\s*(?::\s*([^\]]*?))?\s*\]", re.IGNORECASE)
+# [CHAPTER] or [CHAPTER: The Origin] anywhere in a scene: that scene opens with a paper-tear transition
+CHAPTER_RE = re.compile(r"\[\s*CHAPTER\s*(?::\s*([^\]]*?))?\s*\]", re.IGNORECASE)
+# [OPENING: THE ENTIRE HISTORY OF NVIDIA | UNDER THE LOGO · EP 12] anywhere (usually above Scene 1)
+OPENING_RE = re.compile(r"\[\s*OPENING\s*:\s*([^\]]*?)\s*\]", re.IGNORECASE)
 _SENTINEL_RE = re.compile("\x01(\\d+)\x01")
 
 
@@ -57,10 +66,14 @@ def extract_effects(raw: str, scene_number=None):
 
     def sub(m):
         kind, val = m.group(1).lower(), (m.group(2) or "").strip()
-        if kind == "text" and not val:
-            warnings.append(f"{where}[TEXT] needs words, like [TEXT: 1940] - it was ignored.")
+        if kind in NEEDS_WORDS and not val:
+            warnings.append(f"{where}[{kind.upper()}] needs words, like {NEEDS_WORDS[kind]} - it was ignored.")
             return " "
-        found.append({"type": kind, "text": val})
+        e = {"type": kind, "text": val}
+        if kind == "quote" and "|" in val:
+            q, a = val.split("|", 1)
+            e.update(text=q.strip(), attr=a.strip())
+        found.append(e)
         return f" \x01{len(found) - 1}\x01 "
 
     cleaned = clean_narration(EFFECT_RE.sub(sub, raw))
@@ -106,12 +119,17 @@ def parse_scenes(text: str):
 
     out = []
     for s in scenes:
-        narration, effects, fx_warn = extract_effects("\n".join(s["lines"]), s["number"])
+        raw = "\n".join(s["lines"])
+        narration, effects, fx_warn = extract_effects(OPENING_RE.sub(" ", raw), s["number"])
         warnings.extend(fx_warn)
         sc = {"number": s["number"], "text": narration}
         if effects:
             sc["effects"] = effects
+        ch = CHAPTER_RE.search(raw)
+        if ch:
+            sc["chapter"] = (ch.group(1) or "").strip() or True
         out.append(sc)
+    preamble = [x for x in (OPENING_RE.sub("", x).strip() for x in preamble) if x]
 
     if not out:
         warnings.append('No scenes found. Each scene must start with a label like "Scene 1:" on its own line.')
@@ -137,6 +155,18 @@ def parse_scenes(text: str):
     if empty:
         warnings.append(f"These scenes have no narration text: {empty}")
     return out, warnings
+
+
+def parse_opening(text: str):
+    """The [OPENING: title | stamp] marker, or None. Returns {"title": ..., "stamp": ...}."""
+    m = OPENING_RE.search(text or "")
+    if not m:
+        return None
+    title, _, stamp = m.group(1).partition("|")
+    title = " ".join(title.split())
+    if not title:
+        return None
+    return {"title": title, "stamp": " ".join(stamp.split())}
 
 
 def natural_key(s: str):

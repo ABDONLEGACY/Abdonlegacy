@@ -164,6 +164,46 @@ effects*:
 
 Only scenes with effects take the slightly slower overlay path; every other scene renders as before.
 
+## Premium effects: stamps, typewriter names, sticky notes, circles, quote cards
+
+These work exactly like `[PIN]` and `[TEXT]`: put the marker in the script **right before the word** that
+should trigger it. SceneForge finds that word in your voiceover and plays the effect, with its sound, on it.
+
+```
+[OPENING: THE ENTIRE HISTORY OF NVIDIA | UNDER THE LOGO · EP 12]
+
+Scene 6: Twenty years later, at a [TYPE: DENNY'S] Denny's, the same diner chain ...
+Scene 7: he [STAMP: FOUNDED] started a company with [TEXT: $40,000] 40,000 dollars.
+Scene 9: Today, most AI systems, like [NOTE: ChatGPT was trained on NVIDIA chips] ChatGPT, ...
+Scene 14: [CHAPTER: Title reveal] That company is [CIRCLE] NVIDIA.
+Scene 25: Hold on to that word: [STAMP: HARDSHIP] hardship.
+Scene 29: For 33 years, Jensen told his employees: [QUOTE: We're always 30 days from going out of business. | Jensen Huang] we're always 30 days ...
+```
+
+| Marker | What you see and hear |
+|---|---|
+| `[STAMP: FOUNDED]` | A red rubber stamp thumps onto the picture, with a stamp sound and a short camera shake. On a dark spot it lands on a small cream card so it always reads. Places itself (drag it in **Effects** to move it). |
+| `[TYPE: JENSEN HUANG]` | A typewriter name tag slides in at the bottom left and types itself letter by letter, with typewriter clacks. |
+| `[NOTE: 100 push-ups a night]` | A yellow sticky note with tape pops in (hand-written). Long text wraps by itself; ` / ` forces a new line. Places itself. |
+| `[CIRCLE]` | A red marker loop draws itself around the main subject, with a scribble sound. Places itself around the busiest spot; click in **Effects** to put it exactly where you want. |
+| `[QUOTE: the words \| who said them]` | The picture dims, a cream quote card slides up and the quote types itself (clacks, a soft bell), then the name fades in. It stays at least 2 seconds after the last letter. |
+| `[SHAKE]` | A short camera shake on that word (for big hits). |
+| `[CHAPTER]` or `[CHAPTER: name]` | Anywhere in a scene: that scene starts with a **paper tear** (the last picture tears in two and is pulled away), with a tear and whoosh sound. |
+| `[OPENING: TITLE \| STAMP]` | Once, usually above Scene 1: the video starts with ~5 seconds on aged paper. The title types itself with clacks and a bell, the red stamp thumps under it, then the page tears away into Scene 1. Your voiceover starts right after. |
+
+All these sounds are built in, so you don't need any sound files. Use them with taste: one or two effects in
+a scene is plenty, and many scenes need none. Keep stamps for big moments (at most one every 20-30 seconds).
+
+**Text style "Paper tag":** in **Presets → Edit → Scene effects**, `[TEXT]` can be drawn as hand-written words
+on a torn cream paper tag with a red underline that draws itself (the Under The Logo look).
+
+**Film finish:** the same section has *Film finish*: a light paper texture, soft grain and a subtle vignette over
+the whole video, so it feels printed instead of digital. *Soft whoosh on every hard cut* and *Built-in sounds
+for pins and text* are there too.
+
+**The "Under The Logo" preset** has all of this switched on: paper-tag text, film finish, soft whooshes on
+hard cuts, built-in sounds, gentle camera moves and no captions. Pick it when you create the project.
+
 ## 5. How to name your media files
 
 The **number in the file name** is the scene number:
@@ -219,7 +259,8 @@ Screen and sleep → "Never" while plugged in). Long renders keep the CPU busy, 
 ## Credits
 
 The bundled font **Itim** (by Cadson Demak) is licensed under the SIL Open Font License; see
-`fonts/Itim-OFL.txt`. The face detector **YuNet** (OpenCV Zoo) is MIT-licensed; see
+`fonts/Itim-OFL.txt`. **Caveat**, **Alfa Slab One** and **Lora** are under the SIL Open Font License
+(`fonts/*-OFL.txt`); **Special Elite** is under the Apache License 2.0 (`fonts/SpecialElite-Apache-LICENSE.txt`). The face detector **YuNet** (OpenCV Zoo) is MIT-licensed; see
 `sceneforge/data/YUNET-LICENSE.txt`.
 
 ## For the curious: how it works
@@ -254,5 +295,6 @@ python tests/test_effects.py fx
 python tests/test_ui_effects.py fx
 python tests/make_hand_sample.py hand YOUR_PICTURE.png   # [TEXT: William Donovan] + [TEXT: 1985]
 python tests/test_hand_text.py hand
+python tests/test_premium.py                 # [STAMP] [TYPE] [NOTE] [CIRCLE] [QUOTE] [SHAKE] [CHAPTER] [OPENING]
 python -m sceneforge.selfcheck
 ```

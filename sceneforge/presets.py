@@ -71,6 +71,14 @@ BASE = {
         "text_outline": 6,
         "text_box": False,         # dark rounded box behind the text
         "box_color": "#000000",
+        "tag_size": 120,           # [TEXT] paper tag (premium style)
+        "stamp_size": 96,          # [STAMP: FOUNDED]
+        "type_size": 64,           # [TYPE: Jensen Huang] typewriter lower-third
+        "note_size": 56,           # [NOTE: ...] sticky note
+        "circle_color": "#B8322A", # [CIRCLE] red marker loop
+        "finish": False,           # paper texture + soft film grain + vignette over the whole video
+        "cut_whoosh": False,       # a very soft whoosh on every hard cut
+        "builtin_sounds": False,   # pins and text use the built-in sounds unless you uploaded your own
     },
 }
 
@@ -110,6 +118,22 @@ DEFAULT_PRESETS = {
 }
 
 
+# Presets added in later versions: put into an existing presets.json once (if you delete one, it stays deleted).
+NEW_PRESETS = {
+    "Under The Logo": _merge(BASE, {
+        "motion": {"zoom_min": 1.03, "zoom_max": 1.08, "pan_min": 0.03, "pan_max": 0.05,
+                   "types": ["zoom_in", "zoom_out", "pan_left", "pan_right"],
+                   "easing": ["ease_in_out_sine", "ease_in_out"]},
+        "transitions": {"mode": "cut", "duration": 0.5},
+        "captions": {"enabled": False},
+        "audio": {"music_volume": 0.12, "duck": True, "sfx_volume": 0.5},
+        "effects": {"text_style": "paper_tag", "finish": True, "cut_whoosh": True, "builtin_sounds": True,
+                    "pin_color": "#C43428", "pin_size": 80, "label_size": 40},
+    }),
+}
+DEFAULT_PRESETS.update(NEW_PRESETS)
+
+
 def normalize(preset: dict) -> dict:
     """Fill any missing keys from the defaults so older/hand-edited files keep working."""
     return _merge(BASE, preset or {})
@@ -127,6 +151,15 @@ def load_all() -> dict:
         data = copy.deepcopy(DEFAULT_PRESETS)
     if not data:
         data = copy.deepcopy(DEFAULT_PRESETS)
+    app = paths.load_app_settings()
+    seen = set(app.get("presets_offered", []))
+    added = [n for n in NEW_PRESETS if n not in seen]
+    if added:
+        for n in added:
+            data.setdefault(n, copy.deepcopy(NEW_PRESETS[n]))
+        save_all(data)
+        app["presets_offered"] = sorted(seen | set(added))
+        paths.save_app_settings(app)
     return {name: normalize(p) for name, p in data.items()}
 
 

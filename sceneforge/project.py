@@ -19,8 +19,8 @@ def safe_name(name: str) -> str:
 
 
 def default_effect_position(kind, index_of_kind):
-    """Pins start in the centre (spread a little if there are several); text in the upper third."""
-    if kind == "pin":
+    """Pins and circles start in the centre (spread a little if there are several); text in the upper third."""
+    if kind in ("pin", "circle"):
         step = (index_of_kind + 1) // 2 * (1 if index_of_kind % 2 else -1)
         return {"x": min(0.9, max(0.1, 0.5 + 0.12 * step)), "y": 0.5}
     return {"x": 0.5, "y": min(0.3, 0.2 + 0.07 * index_of_kind)}
@@ -172,6 +172,8 @@ class Project:
             }
             if s.get("effects"):
                 sc["effects"] = merge_effect_positions(s["effects"], o.get("effects") or [])
+            if s.get("chapter"):
+                sc["chapter"] = s["chapter"]
             new.append(sc)
         self.data["script_text"] = text
         self.data["expected_scenes"] = expected

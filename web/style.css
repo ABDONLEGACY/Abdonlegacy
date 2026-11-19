@@ -347,3 +347,14 @@ tr.focus td, .focus { animation: flash 1.8s ease-out; }
 .erritem .msg { flex: 1; white-space: pre-wrap; }
 .erritem .btn { color: #111; }
 .toast { cursor: pointer; }
+
+/* premium effect markers in the Effects window */
+.fx-mark.circle { transform: translate(-50%, -50%); border: 3px solid var(--line); border-radius: 50%; }
+.fx-mark.text.stamp { color: #BA2420; font-family: 'Alfa Slab One', serif; font-weight: 400; border: 0.08em solid #BA2420;
+  border-radius: 0.12em; padding: 0.05em 0.35em; transform: translate(-50%, -50%) rotate(var(--rot)); text-shadow: none; }
+.fx-mark.text.note { color: #2B2522; background: #F4D66E; font-family: 'Caveat', cursive; font-weight: 700; padding: 0.4em 0.5em;
+  white-space: normal; width: 6em; text-align: center; transform: translate(-50%, -50%) rotate(var(--rot)); text-shadow: none;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, .35); }
+.fx-mark.text.tag { color: #2B2522; background: #F2EBDD; font-family: 'Caveat', cursive; font-weight: 700; padding: 0.05em 0.4em 0.25em;
+  transform: translate(-50%, -50%) rotate(var(--rot)); text-shadow: none; box-shadow: 0 3px 8px rgba(0, 0, 0, .35); }
+.fx-mark.text.tag .fx-line { position: absolute; left: 0.3em; right: 0.3em; bottom: 0.12em; height: 0.07em; background: var(--line); border-radius: 0.05em; }

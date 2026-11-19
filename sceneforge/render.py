@@ -27,12 +27,13 @@ from .media import media_kind
 from .motion import plan_motions
 from .sources import ImageSource, VideoSource
 from .transitions import blend, plan_transitions
-from . import effects
+from . import effects, film
+from . import sfx as builtin_sfx
 from .paths import safe_replace, safe_unlink
 
 FPS = 30
 QUALITY = {"fast": ("superfast", 21), "standard": ("veryfast", 19), "high": ("medium", 17)}
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 CHUNK_FRAMES = 300  # neighbouring pieces are encoded together in ~10 s chunks (fewer encoder start-ups)  # bump to invalidate all cached pieces after an engine change
 
 
@@ -74,8 +75,15 @@ class Timeline:
         half = 0 if tcfg.get("mode") == "cut" else int(round(float(tcfg.get("duration", 0.5)) * fps / 2))
         self.types = plan_transitions(self.n - 1, st, seed)
         self.h = []
+        tear_half = int(round(film.TEAR_LEN * fps / 2))
         for k in range(self.n - 1):
-            hk = 0 if self.types[k] == "cut" else min(half, lens[k] // 4, lens[k + 1] // 4)
+            nxt = project.scene(self.numbers[k + 1]) or {}
+            if nxt.get("chapter"):
+                # [CHAPTER]: this scene opens with the paper tear (whatever the normal transition is)
+                self.types[k] = "tear"
+                hk = max(1, min(tear_half, lens[k] // 2 - 1, lens[k + 1] // 2 - 1))
+            else:
+                hk = 0 if self.types[k] == "cut" else min(half, lens[k] // 4, lens[k + 1] // 4)
             self.h.append(hk)
         self.ext = []
         for k in range(self.n):
@@ -146,7 +154,8 @@ class EffectSource:
         for k, fr in enumerate(self.src.frames(a, b), start=a):
             fr = np.array(fr)  # writable copy
             self.layer.draw(fr, k, self.src.project)
-            yield fr
+            dx, dy = self.layer.shake(k)
+            yield film.apply_shake(fr, dx, dy)
 
     def close(self):
         self.src.close()
@@ -169,6 +178,8 @@ class Renderer:
         cap_cfg = project.settings["captions"]
         self.captions = CaptionRenderer(project.words(), cap_cfg, self.W, self.H, self.fps)
         self._sources = {}
+        self.style = {**effects.DEFAULT_STYLE, **(project.settings.get("effects") or {})}
+        self.finish = film.Finish(self.W, self.H) if self.style.get("finish") else None
 
     # ---- sources -------------------------------------------------------------
     def _placeholder(self, k):
@@ -198,8 +209,10 @@ class Renderer:
             src = ImageSource(path or self._placeholder(k), self.W, self.H, length, plan)
         fx = self.tl.effects.get(self.tl.numbers[k])
         if fx:  # only scenes with effects take the (slower) overlay path
-            src = EffectSource(src, effects.EffectLayer(fx, self.p.settings.get("effects"), self.W, self.H,
-                                                        self.fps, e0))
+            cap = self.p.settings.get("captions", {})
+            src = EffectSource(src, effects.EffectLayer(
+                fx, self.p.settings.get("effects"), self.W, self.H, self.fps, e0, end_s=self.tl.B[k + 1] / self.fps,
+                captions_bottom=bool(cap.get("enabled")) and cap.get("position", "bottom") == "bottom"))
         self._sources[k] = src
         return src
 
@@ -212,7 +225,8 @@ class Renderer:
     def piece_sig(self, pc):
         k = pc["k"]
         d = {"v": RENDER_VERSION, "piece": pc, "W": self.W, "H": self.H, "fps": self.fps, "q": self.quality,
-             "scene": self.tl.scene_desc(k), "caps": self.captions.signature(pc["f0"], pc["f1"])}
+             "scene": self.tl.scene_desc(k), "caps": self.captions.signature(pc["f0"], pc["f1"]),
+             "finish": bool(self.finish), "end": self.tl.B[k + 1]}
         if pc["kind"] == "trans":
             d["next"] = self.tl.scene_desc(k + 1)
         return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
@@ -238,9 +252,10 @@ class Renderer:
         a_frames = [np.array(f) for f in a_iter]  # at most a second of frames
         b_iter = self.source(k + 1).frames(f0 - n0, f1 - n0)
         total = f1 - f0
+        tear = film.Tear(a_frames[0], seed=self.p.data["seed"] + k) if pc["type"] == "tear" and a_frames else None
         for i, (A, Bf) in enumerate(zip(a_frames, b_iter)):
             q = (i + 0.5) / total
-            yield f0 + i, blend(pc["type"], A, Bf, q)
+            yield f0 + i, (tear.draw(np.asarray(Bf), q) if tear else blend(pc["type"], A, Bf, q))
 
     def chunks(self, pieces):
         """Group consecutive pieces into ~10 s chunks. Each chunk is one encoded file that can be reused."""
@@ -271,6 +286,8 @@ class Renderer:
                         raise Stopped()
                     if not fr.flags.writeable or not fr.flags.c_contiguous:
                         fr = np.array(fr)
+                    if self.finish is not None:
+                        fr = self.finish.apply(fr, gidx)
                     self.captions.draw(fr, gidx)
                     proc.stdin.write(memoryview(fr))
                     count += 1
@@ -430,6 +447,11 @@ class Renderer:
                             cache["underline"] = ff.read_audio_f32(line["path"], sr=audiomod.SR)
                         fx.add(e["t"] + effects.LINE_DELAY - t0, cache["underline"], line["volume"])
                         used = True
+        # built-in sounds: premium effects, paper tears, soft whooshes on hard cuts
+        for when, name, gain in self.builtin_events():
+            if t0 - 2 <= when < t1:
+                fx.add(when - t0, builtin_sfx.get(name), gain)
+                used = True
         fx_wav = None
         if used:
             fx_wav = self.dir / "fx_track.wav"
@@ -447,6 +469,27 @@ class Renderer:
                            music_volume=float(st["audio"].get("music_volume", 0.15)),
                            duck=bool(st["audio"].get("duck", True)))
         return out_path
+
+    def builtin_events(self):
+        """[(time s, built-in sound name, gain)] for the whole video (effects, paper tears, cut whooshes)."""
+        if hasattr(self, "_events"):
+            return self._events
+        out = []
+        user = {k: bool(v["path"]) for k, v in effects.sound_settings().items()}
+        k_of = {n: k for k, n in enumerate(self.tl.numbers)}
+        for num, items in self.tl.effects.items():
+            k = k_of.get(num)
+            end_s = self.tl.B[k + 1] / self.fps if k is not None else None
+            out += effects.builtin_sound_events(items, self.style, end_s, user)
+        for k, typ in enumerate(self.tl.types):
+            b = self.tl.B[k + 1] / self.fps
+            if typ == "tear":
+                start = b - self.tl.h[k] / self.fps
+                out += [(start, "tear", 1.0), (start - 0.1, "whoosh", 1.0)]
+            elif self.tl.h[k] == 0 and self.style.get("cut_whoosh"):
+                out.append((b - 0.21, "whoosh_soft", 1.0))
+        self._events = sorted(out)
+        return self._events
 
     def audio_sig(self, t0, t1):
         """Hash of everything the mixed audio depends on, so an unchanged mix is reused (big projects)."""
@@ -468,7 +511,8 @@ class Renderer:
              "whoosh": [[self.tl.B[k + 1], h] for k, h in enumerate(self.tl.h) if h > 0] if p.data.get("sfx") else [],
              "effects": [[e["type"], e["t"]] for items in self.tl.effects.values() for e in items],
              "effect_style": [st.get("effects", {}).get(k) for k in ("text_style", "underline")],
-             "effect_sounds": {k: [fstat(v["path"]), v["volume"]] for k, v in effects.sound_settings().items()}}
+             "effect_sounds": {k: [fstat(v["path"]), v["volume"]] for k, v in effects.sound_settings().items()},
+             "builtin": hashlib.sha1(json.dumps(self.builtin_events()).encode()).hexdigest()}
         return hashlib.sha1(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
 
     # ---- top level ---------------------------------------------------------------
@@ -485,8 +529,11 @@ class Renderer:
             safe_unlink(sig_file)
             self.build_audio(0.0, self.tl.N / self.fps, audio_out)
             sig_file.write_text(sig)
-        video = self.render_video(w_start=0.04, w_span=0.92)
+        opening = self.render_opening()
+        video = self.render_video(w_start=0.06 if opening else 0.04, w_span=0.90 if opening else 0.92)
         self.progress(0.97, "Adding sound ...")
+        if opening:
+            video, audio_out = self.join_opening(opening, video, audio_out)
         name = self.p.data["name"]
         suffix = "" if self.resolution == "1080p" else f"_{self.resolution}"
         out = self.p.output_dir / f"{_safe_file(name)}{suffix}.mp4"
@@ -504,6 +551,83 @@ class Renderer:
             safe_replace(tmp, out)
         self.progress(1.0, f"Finished in {fmt_time(time.time() - t0)}")
         return out
+
+    # ---- the typewriter opening ([OPENING: title | stamp] in the script) --------------------------------
+    def render_opening(self):
+        """Render (or reuse) the opening title: returns (video path, audio wav path) or None."""
+        op = self.p.data.get("opening")
+        if not op or not op.get("title") or not self.tl.pieces:
+            return None
+        O = film.Opening(op["title"], op.get("stamp", ""), self.W, self.H)
+        first_piece = self.tl.pieces[0]
+        sig = hashlib.sha1(json.dumps({"v": RENDER_VERSION, "op": op, "W": self.W, "H": self.H, "fps": self.fps,
+                                       "q": self.quality, "finish": bool(self.finish),
+                                       "first": self.piece_sig(first_piece)}, sort_keys=True, default=str)
+                           .encode()).hexdigest()
+        video, wav, sig_file = self.dir / "opening.mp4", self.dir / "opening.wav", self.dir / "opening.json"
+        if video.exists() and wav.exists() and sig_file.exists() and sig_file.read_text() == sig:
+            return video, wav
+        self.progress(0.02, "Typing the opening title ...")
+        safe_unlink(sig_file)
+        try:
+            first = np.array(next(iter(self._frames_for(first_piece)))[1])  # scene 1's first frame, under the tear
+        finally:
+            self.close()
+        nf = int(round(O.duration * self.fps))
+        tear = film.Tear(O.page(O.tear_t), seed=self.p.data["seed"])
+        tmp = video.with_name("opening.part.mp4")
+        proc = self._encoder(tmp)
+        try:
+            for f in range(nf):
+                if STOP.is_set():
+                    raise Stopped()
+                t = f / self.fps
+                fr = O.page(t) if t < O.tear_t else tear.draw(first, min(1.0, (t - O.tear_t + 0.5 / self.fps) / film.TEAR_LEN))
+                if self.finish is not None:
+                    fr = self.finish.apply(np.ascontiguousarray(fr), f)
+                proc.stdin.write(memoryview(np.ascontiguousarray(fr)))
+            proc.stdin.close()
+        except BaseException:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            proc.kill()
+            proc.wait()
+            safe_unlink(tmp)
+            raise
+        if proc.wait() != 0:
+            raise ff.FFmpegError("Video encoder failed (opening): " + ff.stderr_text(proc))
+        safe_replace(tmp, video)
+        # its sounds: a clack per letter, the bell, the stamp, the tear
+        import random
+        rng = random.Random(7)
+        track = audiomod.Track(self.dir / f"opening_track_{os.getpid()}.npy", nf / self.fps)
+        for when, name in O.events:
+            gain = rng.uniform(0.75, 1.0) if name == "clack" else 1.0
+            track.add(when + (rng.uniform(-0.006, 0.006) if name == "clack" else 0.0), builtin_sfx.get(name), gain)
+        track.to_wav(wav, nf / self.fps)
+        sig_file.write_text(sig)
+        return video, wav
+
+    def join_opening(self, opening, video, audio):
+        """Put the opening in front of the video and its sounds in front of the mixed audio."""
+        op_video, op_wav = opening
+        listing = self.dir / ("with_opening_%d.txt" % os.getpid())
+        listing.write_text("".join(f"file '{Path(x).resolve().as_posix()}'\n" for x in (op_video, video)),
+                           encoding="utf-8")
+        joined = self.dir / "video_with_opening.mp4"
+        ff.run_to(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", "-movflags", "+faststart"], joined,
+                  desc="Adding the opening")
+        safe_unlink(listing)
+        joined_audio = self.dir / "audio_with_opening.m4a"
+        sr = audiomod.SR
+        ff.run_to(["-i", str(op_wav), "-i", str(audio), "-filter_complex",
+                   f"[0:a]aresample={sr},aformat=sample_fmts=fltp:channel_layouts=stereo[a0];"
+                   f"[1:a]aresample={sr},aformat=sample_fmts=fltp:channel_layouts=stereo[a1];"
+                   "[a0][a1]concat=n=2:v=0:a=1[out]", "-map", "[out]", "-c:a", "aac", "-b:a", "192k"],
+                  joined_audio, desc="Adding the opening sounds")
+        return joined, joined_audio
 
     def preview(self, number):
         """Short preview of one scene (with its transitions in and out), at low resolution."""

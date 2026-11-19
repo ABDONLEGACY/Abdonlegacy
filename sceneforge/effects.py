@@ -31,7 +31,13 @@ LINE_DRAW = 0.50   # ... and takes this long, left to right
 TILT_RANGE = (-4.0, 2.0)  # degrees; one fixed random tilt per text (same on every render)
 SAFE = 0.04      # text stays this far (fraction of the frame) inside the frame edges
 SS = 4           # supersampling when drawing sprites, for smooth edges
-TEXT_STYLES = {"hand_underline": "Hand-lettered + underline", "classic": "Classic pop"}
+TEXT_STYLES = {"hand_underline": "Hand-lettered + underline", "paper_tag": "Paper tag + red underline (premium)",
+               "classic": "Classic pop"}
+# effects that stay at a fixed spot on the screen (not placed on the picture)
+SCREEN_FIXED = ("type", "quote", "shake")
+TYPE_DT = 0.05      # seconds per typed letter in a [TYPE] lower-third
+QUOTE_IN = 0.35     # quote card slides in, then typing starts
+QUOTE_HOLD = 2.0    # the finished quote stays at least this long
 
 DEFAULT_STYLE = {
     "text_style": "hand_underline",
@@ -41,6 +47,11 @@ DEFAULT_STYLE = {
     "text_font": "Arial Bold", "text_size": 96, "text_color": "#FFFFFF",
     "text_outline_color": "#000000", "text_outline": 6, "text_box": False, "box_color": "#000000",
     "label_size": 44,
+    # premium effects ([STAMP], [TYPE], [NOTE], [CIRCLE], [QUOTE], [SHAKE]) and the film finish
+    "tag_size": 120, "stamp_size": 96, "type_size": 64, "note_size": 56, "circle_color": "#B8322A",
+    "finish": False,           # paper texture + soft grain + vignette over the whole video
+    "cut_whoosh": False,       # a very soft whoosh on every hard cut
+    "builtin_sounds": False,   # pins and text use the built-in sounds when you haven't uploaded your own
 }
 
 
@@ -73,13 +84,18 @@ def resolve(project, words=None, auto=True, compute=True, only=None):
             item = {"i": i, "type": e["type"], "text": e.get("text", ""), "x": float(e.get("x", 0.5)),
                     "y": float(e.get("y", 0.5)), "placed": bool(e.get("placed")), "auto": False,
                     "t": None, "word": "", "measured": None}
-            if e["type"] == "text":
-                item["angle"] = tilt_for(project.data.get("seed", 0), sc["number"], i) \
-                    if style.get("text_style") == "hand_underline" else 0.0
+            if e.get("attr"):
+                item["attr"] = e["attr"]
+            if e["type"] in ("text", "stamp", "note"):
+                item["angle"] = angle_for(e["type"], style, project.data.get("seed", 0), sc["number"], i)
                 if placer and not e.get("placed"):
                     pos = placer.place(si, sc, item)
                     if pos:
                         item["x"], item["y"], item["auto"] = pos[0], pos[1], True
+            elif e["type"] == "circle" and placer and not e.get("placed"):
+                pos = placer.place(si, sc, item)
+                if pos:
+                    item["x"], item["y"], item["auto"] = pos[0], pos[1], True
             if sw:
                 w = sw[min(int(e.get("word", 0)), len(sw) - 1)]
                 item.update(t=float(w["s"]), word=w["text"], measured=bool(w.get("m", True)))
@@ -88,6 +104,31 @@ def resolve(project, words=None, auto=True, compute=True, only=None):
             placer.save()
         out[sc["number"]] = items
     return out
+
+
+def angle_for(kind, style, seed, scene_number, i):
+    """Fixed random tilt (same on every render): hand text -4..+2, paper tags +-2, stamps 4..8 either way,
+    sticky notes +-5 degrees."""
+    import random
+    rng = random.Random(f"{seed}:{scene_number}:{i}:tilt")
+    if kind == "text":
+        ts = style.get("text_style")
+        if ts == "hand_underline":
+            return round(rng.uniform(*TILT_RANGE), 3)
+        return round(rng.uniform(-2, 2), 3) if ts == "paper_tag" else 0.0
+    if kind == "stamp":
+        return round(rng.uniform(4, 8) * (1 if rng.random() < 0.5 else -1), 3)
+    if kind == "note":
+        return round(rng.uniform(-5, 5), 3)
+    return 0.0
+
+
+def quote_timing(t, end_s, n_chars):
+    """(typing start, typing length) for a quote card triggered at t in a scene that ends at end_s: typed
+    over ~0.045 s per letter, faster if needed so the finished quote can stay on screen for QUOTE_HOLD."""
+    start = t + QUOTE_IN
+    room = (end_s - start) - QUOTE_HOLD - 0.3 if end_s else 99
+    return start, max(0.6, min(n_chars * 0.045, room))
 
 
 # ---------------------------------------------------------------------------------------------- easing
@@ -382,12 +423,18 @@ def ring(frame, X, Y, radius, thickness, color_bgr, opacity):
 class EffectLayer:
     """Draws one scene's effects onto its frames."""
 
-    def __init__(self, effects, style, W, H, fps, ext_start_frame):
+    def __init__(self, effects, style, W, H, fps, ext_start_frame, end_s=None, captions_bottom=False):
         self.fx = effects
         self.st = {**DEFAULT_STYLE, **(style or {})}
         self.W, self.H, self.fps, self.e0 = W, H, fps, ext_start_frame
-        unit = min(W, H) / 1080.0
+        self.end_s, self.captions_bottom = end_s, captions_bottom
+        unit = self.unit = min(W, H) / 1080.0
         st = self.st
+        self.premium = {}   # effect index -> sprite object (paper tags, stamps, notes, lower-thirds, quote cards)
+        self.stamp_card = {}
+        self.loops = {}
+        # stamps and [SHAKE] markers shake the camera for 0.3 s
+        self.hits = [(e["t"], 10.0 * unit) for e in effects if e["type"] in ("stamp", "shake")]
         self.pin_h = float(st["pin_size"]) * unit
         # pins are drawn 30 % larger and scaled down, so they stay crisp while the camera zooms in
         self.pin, self.pin_anchor = pin_sprite(st["pin_color"], self.pin_h * 1.3)
@@ -396,6 +443,8 @@ class EffectLayer:
         self.texts = {}
         self.hand = {}
         for e in effects:
+            if e["type"] == "text" and st.get("text_style") == "paper_tag":
+                continue
             if e["type"] == "text" and st.get("text_style") == "hand_underline":
                 self.hand[e["i"]] = hand_layers(e["text"], st, W, H, seed=e["i"])
             elif e["type"] == "text":
@@ -409,11 +458,115 @@ class EffectLayer:
                                                  max(0, int(round(float(st["text_outline"]) * unit * 0.6))),
                                                  bool(st["text_box"]), st["box_color"], anchor="left")
 
+    # ---- premium effects ---------------------------------------------------------------------------
+    def _prem(self, e):
+        i = e["i"]
+        if i not in self.premium:
+            from . import premium as P
+            import zlib
+            rng = np.random.default_rng(zlib.crc32(f"{e['type']}:{e['text']}:{i}".encode()))
+            st, u = self.st, self.unit
+            if e["type"] == "type":
+                self.premium[i] = P.LowerThird(e["text"], float(st.get("type_size", 64)) * u, rng, u)
+            elif e["type"] == "quote":
+                self.premium[i] = P.QuoteCard(e["text"], e.get("attr", ""), rng, u, min(self.W * 0.72, 1380 * u))
+            elif e["type"] == "circle":
+                rx = 0.11 * self.W
+                self.premium[i] = P.marker_loop(rx, rx * 0.72, rng)
+            else:
+                self.premium[i] = premium_sprite(e["type"], e["text"], st, self.W, self.H,
+                                                 card=self.stamp_card.get(i, False))
+        return self.premium[i]
+
+    def shake(self, k):
+        """Camera-shake offset (dx, dy) in pixels for local frame k."""
+        if not self.hits:
+            return 0.0, 0.0
+        from .film import shake_offset
+        return shake_offset((self.e0 + k) / self.fps, self.hits)
+
+    def _quote_dim(self, frame, t_now):
+        dim = 0.0
+        for e in self.fx:
+            if e["type"] == "quote" and t_now >= e["t"]:
+                dim = max(dim, 0.25 * min(1.0, (t_now - e["t"]) / 0.3))
+        if dim > 0.003:
+            cv2.convertScaleAbs(frame, dst=frame, alpha=1.0 - dim)
+
+    def _draw_premium(self, frame, e, t, k, project):
+        from . import premium as P
+        u, W, H = self.unit, self.W, self.H
+        kind = e["type"]
+        if kind == "shake":
+            return
+        if kind == "type":
+            L = self._prem(e)
+            n = int(max(0.0, t - 0.2) / TYPE_DT) if t >= 0.2 else 0
+            n = min(n, len(L.text))
+            typing = n < len(L.text)
+            caret = typing or (int(t * 3) % 2 == 0 and t < 0.2 + len(L.text) * TYPE_DT + 0.6)
+            spr = L.sprite(n, caret)
+            y = H * (0.64 if self.captions_bottom else 0.80)
+            x = SAFE * W + (1 - P.ease_out(t / 0.25)) * -40 * u
+            blit(frame, spr, (0.0, spr.shape[0] / 2), x, y, opacity=min(1.0, t / 0.15))
+            return
+        if kind == "quote":
+            Q = self._prem(e)
+            ts, dur = quote_timing(e["t"], self.end_s, Q.total)
+            typed = (t - (ts - e["t"])) / dur  # 0..1 through the typing
+            n = 0 if typed <= 0 else Q.total if typed >= 1 else int(typed * Q.total)
+            ta = typed * dur - dur - 0.1        # seconds since typing finished (attribution fades in after it)
+            spr = Q.sprite(n, min(1.0, max(0.0, ta / 0.3)))
+            q = P.ease_out(t / QUOTE_IN)
+            cy = min(H * 0.66 + (1 - q) * 40 * u, H - SAFE * H - spr.shape[0] / 2)
+            blit(frame, spr, (spr.shape[1] / 2, spr.shape[0] / 2), W / 2, cy, opacity=min(1.0, t / 0.25))
+            return
+        X, Y, z = project(k, e["x"], e["y"])
+        if kind == "circle":
+            pts = self._prem(e)
+            p = P.smooth(t / 0.5)
+            m = max(2, int(len(pts) * p))
+            P.draw_stroke(frame, pts[:m] * z + [X, Y], P.RED if self.st.get("circle_color") is None else
+                          hex_to_rgb(self.st["circle_color"], P.RED), max(2.0, 8 * u))
+            return
+        if kind == "stamp" and e["i"] not in self.stamp_card:
+            # a dark spot gets a small cream card under the stamp, so it always reads
+            box = premium_sprite("stamp", e["text"], self.st, W, H).extent
+            x0, y0 = int(max(0, X + box[0])), int(max(0, Y + box[1]))
+            x1, y1 = int(min(W, X + box[2])), int(min(H, Y + box[3]))
+            region = frame[y0:y1, x0:x1]
+            lum = float(cv2.cvtColor(region, cv2.COLOR_BGR2GRAY).mean()) / 255 if region.size else 1.0
+            self.stamp_card[e["i"]] = lum < 0.72
+        obj = self._prem(e)
+        ang = float(e.get("angle", 0.0))
+        if kind == "stamp":
+            X, Y = self._keep_inside(X, Y, obj.extent, ang)
+            blit(frame, obj.spr, obj.anchor, X, Y, scale=P.stamp_scale(t), opacity=min(1.0, t / 0.08), angle=ang)
+            return
+        X, Y = self._keep_inside(X, Y, obj.extent, ang)
+        sc = P.pop_scale(t)
+        if kind == "note":
+            blit(frame, obj.spr, obj.anchor, X, Y, scale=sc, opacity=min(1.0, t / 0.06), angle=ang)
+            return
+        # [TEXT] as a torn paper tag with a red underline that draws itself
+        blit(frame, obj.base, obj.anchor, X, Y, scale=sc, opacity=min(1.0, t / 0.06), angle=ang)
+        if t >= 0.15:
+            p = P.smooth((t - 0.15) / 0.35)
+            line = line_progress(obj.line, obj.line_x[0], obj.line_x[1], p, max(1.5, 3 * u))
+            blit(frame, line, obj.anchor, X, Y, scale=sc, angle=ang)
+
     def draw(self, frame, k, project):
         """k = local frame index in the scene's extended range; project(k, fx, fy) -> (X, Y, zoom)."""
         t_now = (self.e0 + k) / self.fps
+        if any(e["type"] == "quote" for e in self.fx):
+            self._quote_dim(frame, t_now)
         for e in self.fx:
             t = t_now - e["t"]
+            if e["type"] in ("stamp", "type", "note", "circle", "quote", "shake") or (
+                    e["type"] == "text" and self.st.get("text_style") == "paper_tag"):
+                if t >= 0:
+                    self._draw_premium(frame, e, t, k, project)
+                continue
             if e["type"] == "pin":
                 if t < -FALL:
                     continue
@@ -487,6 +640,48 @@ class EffectLayer:
 SOUND_KINDS = ("pin", "text", "underline")
 
 
+def builtin_sound_events(items, style, end_s, user_sounds):
+    """Built-in sounds for one scene's effects: [(time in seconds, built-in sound name, gain)].
+
+    Premium effects always get their sounds. Pins and text get the built-in thud / pop / scribble only when the
+    style says so ("builtin_sounds") and you haven't uploaded your own sound for them in Settings."""
+    import random
+    st = {**DEFAULT_STYLE, **(style or {})}
+    out = []
+    builtin = bool(st.get("builtin_sounds"))
+    for e in items:
+        t, kind = e["t"], e["type"]
+        rng = random.Random(f"{kind}:{e.get('text', '')}:{t:.3f}")
+        if kind == "pin" and builtin and not user_sounds.get("pin"):
+            out.append((t, "pin_thud", 1.0))
+        elif kind == "text" and builtin:
+            if not user_sounds.get("text"):
+                out.append((t, "pop", 1.0))
+            if not user_sounds.get("underline") and st.get("text_style") in ("paper_tag", "hand_underline") \
+                    and (st.get("text_style") == "paper_tag" or st.get("underline", True)):
+                out.append((t + (0.15 if st.get("text_style") == "paper_tag" else LINE_DELAY), "scribble", 0.9))
+        elif kind == "stamp":
+            out.append((t, "stamp", 1.0))
+        elif kind == "note":
+            out.append((t, "pop", 1.0))
+        elif kind == "circle":
+            out.append((t, "scribble", 1.1))
+        elif kind == "type":
+            for i, ch in enumerate(e.get("text", "")):
+                if ch != " ":
+                    out.append((t + 0.2 + i * TYPE_DT + rng.uniform(-0.006, 0.006), "clack", rng.uniform(0.7, 1.0)))
+        elif kind == "quote":
+            text = e.get("text", "")
+            n = len(" ".join(text.split()))
+            ts, dur = quote_timing(t, end_s, n)
+            i = 0
+            while i < n:  # a clack every 2-3 letters while the card types
+                out.append((ts + dur * i / max(1, n) + rng.uniform(-0.008, 0.008), "clack", rng.uniform(0.55, 0.8)))
+                i += rng.choice((2, 3))
+            out.append((ts + dur + 0.08, "bell", 0.6))
+    return out
+
+
 def sounds_dir():
     from . import paths
     d = paths.SETTINGS_DIR / "sounds"
@@ -536,8 +731,10 @@ def hand_layers(text, st, W, H, seed=""):
     return L
 
 
-def text_box_px(text, st, W, H):
-    """Tight extent (left, top, right, bottom) in pixels around its position that a [TEXT] takes in a W x H frame."""
+def text_box_px(text, st, W, H, kind="text"):
+    """Tight extent (left, top, right, bottom) in pixels around its position that an effect takes in a W x H frame."""
+    if kind in ("stamp", "note", "circle") or (kind == "text" and st.get("text_style") == "paper_tag"):
+        return premium_sprite(kind, text, st, W, H).extent
     if st.get("text_style") == "hand_underline":
         return hand_layers(text, st, W, H)["extent"]
     unit = min(W, H) / 1080.0
@@ -545,6 +742,38 @@ def text_box_px(text, st, W, H):
                           st["text_outline_color"], max(0, int(round(float(st["text_outline"]) * unit))),
                           bool(st["text_box"]), st["box_color"])
     return (-spr.shape[1] / 2, -spr.shape[0] / 2, spr.shape[1] / 2, spr.shape[0] / 2)
+
+
+# ---------------------------------------------------------------------------------------------- premium sprites
+_PREMIUM_CACHE = {}
+
+
+class _Box:
+    def __init__(self, extent):
+        self.extent = extent
+
+
+def premium_sprite(kind, text, st, W, H, card=False, seed=0):
+    """The premium sprite object for an effect (paper tag / stamp / sticky note), sized for a W x H frame."""
+    from . import premium as P
+    unit = min(W, H) / 1080.0
+    if kind == "circle":
+        rx, ry = 0.11 * W, 0.11 * W * 0.72
+        return _Box((-rx, -ry, rx, ry))
+    key = (kind, text, W, H, card, seed, st.get("tag_size"), st.get("stamp_size"), st.get("note_size"))
+    if key not in _PREMIUM_CACHE:
+        if len(_PREMIUM_CACHE) > 64:
+            _PREMIUM_CACHE.clear()
+        import zlib
+        rng = np.random.default_rng(zlib.crc32(f"{kind}:{text}:{seed}".encode()))
+        if kind == "stamp":
+            obj = P.Stamp(text, float(st.get("stamp_size", 96)) * unit, rng, unit, card=card)
+        elif kind == "note":
+            obj = P.Sticky(text, float(st.get("note_size", 56)) * unit, rng, unit)
+        else:
+            obj = P.PaperTag(text, float(st.get("tag_size", 120)) * unit, W * 0.40, rng, unit)
+        _PREMIUM_CACHE[key] = obj
+    return _PREMIUM_CACHE[key]
 
 
 # ---------------------------------------------------------------------------------------------- auto placement
@@ -567,12 +796,35 @@ def _faces(bgr):
         return []
 
 
+def _doodle_heads(bgr):
+    """Round-head doodle characters (bright, almost colourless round blobs with a dark ink outline), as face boxes
+    (x, y, w, h). Face detectors miss them, and to the "emptiest area" search they look like blank space."""
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    sat = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)[..., 1]
+    white = ((g > 200) & (sat < 40)).astype(np.uint8)
+    white = cv2.morphologyEx(white, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, lab, stats, _c = cv2.connectedComponentsWithStats(white)
+    W = bgr.shape[1]
+    out = []
+    for i in range(1, n):
+        x, y, bw, bh, area = (int(v) for v in stats[i])
+        if area < 60 or bw < 10 or bw > 0.25 * W:
+            continue
+        if not (0.6 < bw / max(1, bh) < 1.5 and area / (bw * bh) > 0.6):
+            continue
+        m = (lab[max(0, y - 4):y + bh + 4, max(0, x - 4):x + bw + 4] == i).astype(np.uint8)
+        ring = cv2.dilate(m, np.ones((7, 7), np.uint8)) - m
+        if g[max(0, y - 4):y + bh + 4, max(0, x - 4):x + bw + 4][ring > 0].mean() < 150:
+            out.append((float(x), float(y), float(bw), float(bh)))
+    return out
+
+
 class AutoPlacer:
     """Puts [TEXT] in the emptiest part of a scene's picture (sky, plain background, open ground), away from
     faces, skin and busy detail, preferring the top of the frame, inside safe margins and clear of captions,
     for the whole camera move. Results are cached per picture / text / style."""
 
-    VERSION = 2
+    VERSION = 5
 
     def __init__(self, project, style, compute=True):
         import json
@@ -622,8 +874,10 @@ class AutoPlacer:
         kind = media_kind(mp)
         plan = self.plans().get(sc["number"]) if kind != "video" else None
         cap = self.p.settings.get("captions", {})
-        keys = ("text_style", "hand_font", "hand_size", "underline", "text_font", "text_size", "text_outline", "text_box")
-        sig = json.dumps([self.VERSION, str(mp), st_.st_size, int(st_.st_mtime), item["text"], item.get("angle", 0),
+        keys = ("text_style", "hand_font", "hand_size", "underline", "text_font", "text_size", "text_outline", "text_box",
+                "tag_size", "stamp_size", "note_size")
+        sig = json.dumps([self.VERSION, item["type"], str(mp), st_.st_size, int(st_.st_mtime), item["text"],
+                          item.get("angle", 0),
                           {k: self.st.get(k) for k in keys}, self.W, self.H, plan,
                           bool(cap.get("enabled")), cap.get("position"), self.taken.get(si, [])],
                          sort_keys=True, default=str)
@@ -676,7 +930,8 @@ class AutoPlacer:
         bgr = self._picture(mp, kind)
         ph, pw = bgr.shape[:2]
         (L, T, R, B), fw0, fh0 = self._visible(pw / ph, plan)
-        l, t, r, b = rotated_extent(text_box_px(item["text"], self.st, self.W, self.H), float(item.get("angle", 0.0)))
+        l, t, r, b = rotated_extent(text_box_px(item["text"], self.st, self.W, self.H, item["type"]),
+                                    float(item.get("angle", 0.0)))
         # extents in picture fractions (at the widest camera view, where the text covers the most picture)
         l, r = l / self.W * fw0, r / self.W * fw0
         t, b = t / self.H * fh0, b / self.H * fh0
@@ -706,12 +961,24 @@ class AutoPlacer:
         skin = ((ycc[..., 1] > 135) & (ycc[..., 1] < 175) & (ycc[..., 2] > 80) & (ycc[..., 2] < 125)).astype(np.float32)
         skin = cv2.GaussianBlur(skin, (0, 0), 4)
         face = np.zeros_like(gray)
-        for x, y, w, h in _faces(bgr):
+        # text, stamps and notes also keep off round-head doodle characters; a circle aims at the main subject,
+        # so a crowd of little heads must not pull it away
+        heads = [] if item["type"] == "circle" else _doodle_heads(bgr)
+        for x, y, w, h in _faces(bgr) + heads:
             # the face plus the body below it
             cv2.rectangle(face, (int(x - 0.5 * w), int(y - 0.6 * h)), (int(x + 1.5 * w), int(y + 3.0 * h)), 1.0, -1)
         for x, y, w, h in taken:  # other texts in this scene (their centre + size)
             cv2.rectangle(face, (int((x - w / 2) * pw), int((y - h / 2) * ph)), (int((x + w / 2) * pw), int((y + h / 2) * ph)), 1.0, -1)
         cost = busy + 0.8 * skin + 3.0 * face
+        if item["type"] == "circle":
+            # a marker circle goes AROUND the main subject: the busiest spot (faces count most), away from the edges
+            cost = -(busy + 2.0 * face)
+            x_lo, x_hi = max(x_lo, L + 0.18 * (R - L)), min(x_hi, R - 0.18 * (R - L))
+            y_lo, y_hi = max(y_lo, T + 0.18 * (B - T)), min(y_hi, B - 0.18 * (B - T))
+            if x_lo > x_hi:
+                x_lo = x_hi = (L + R) / 2
+            if y_lo > y_hi:
+                y_lo = y_hi = (T + B) / 2
         ii = cv2.integral(cost)
         best, best_xy = None, ((x_lo + x_hi) / 2, y_lo)
         bwp, bhp = max(2, int(bw * pw)), max(2, int(bh * ph))
@@ -722,7 +989,10 @@ class AutoPlacer:
                 x1, y1 = x0 + bwp, y0 + bhp
                 mean = (ii[y1, x1] - ii[y0, x1] - ii[y1, x0] + ii[y0, x0]) / (bwp * bhp)
                 vpos = (gy - y_lo) / (y_hi - y_lo) if y_hi > y_lo else 0.0
-                c = mean + 0.25 * vpos + 0.08 * abs(gx - (L + R) / 2) / max(1e-6, R - L)  # prefer the top, then centre
+                if item["type"] == "circle":
+                    c = mean + 0.15 * abs(gx - (L + R) / 2) / max(1e-6, R - L)  # busiest, a little toward the centre
+                else:
+                    c = mean + 0.25 * vpos + 0.08 * abs(gx - (L + R) / 2) / max(1e-6, R - L)  # prefer the top, then centre
                 if best is None or c < best:
                     best, best_xy = c, (gx, gy)
         # remember the box (centre + size) so a second text in the scene avoids it

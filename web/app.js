@@ -844,8 +844,12 @@ async function openEffects(number, after) {
   if (sel < 0) sel = 0;
   const name = (e, i) => {
     const n = fx.slice(0, i + 1).filter((x) => x.type === e.type).length;
-    return e.type === "pin" ? `Pin ${n}${e.text ? `: ${e.text}` : ""}` : `Text: ${e.text}`;
+    const lab = { pin: "Pin", text: "Text", stamp: "Stamp", type: "Typewriter name", note: "Sticky note",
+      circle: "Marker circle", quote: "Quote card", shake: "Camera shake" }[e.type] || e.type;
+    if (e.type === "pin" || e.type === "circle") return `${lab} ${n}${e.text ? `: ${e.text}` : ""}`;
+    return e.text ? `${lab}: ${e.text}` : lab;
   };
+  const FIXED = { type: "bottom-left of the screen", quote: "lower middle of the screen", shake: "whole picture" };
   const m = modal(`<div class="modal wide fx-modal"><div class="modal-h"><div class="mi">${icon("pin")}</div>
       <div><h3>Scene ${number} effects</h3><p>Click on the picture to place the selected effect. Drag pins and text to move them.</p></div><button class="x" data-x>&times;</button></div>
     <div class="modal-b fx-body">
@@ -859,8 +863,18 @@ async function openEffects(number, after) {
       <button class="btn ghost" data-x>Cancel</button><button class="btn primary" id="fx-save">${icon("save")} Save positions</button></div></div>`);
   const stage = $(".fx-stage", m), img = $(".fx-img", m), list = $(".fx-list", m);
   const markers = fx.map((e, i) => {
-    const mk = e.type === "pin"
+    const mk = FIXED[e.type]
+      ? el(`<div class="fx-mark fixed" style="display:none"></div>`)
+      : e.type === "pin"
       ? el(`<div class="fx-mark pin" title="${esc(name(e, i))}">${PIN_SVG}${e.text ? `<span class="fx-label">${esc(e.text)}</span>` : ""}</div>`)
+      : e.type === "circle"
+      ? el(`<div class="fx-mark circle" title="${esc(name(e, i))}" style="--line:${esc(style.circle_color || "#B8322A")}"></div>`)
+      : e.type === "stamp"
+      ? el(`<div class="fx-mark text stamp" title="${esc(name(e, i))}" style="--rot:${e.angle || 0}deg">${esc(e.text.toUpperCase())}</div>`)
+      : e.type === "note"
+      ? el(`<div class="fx-mark text note" title="${esc(name(e, i))}" style="--rot:${e.angle || 0}deg">${esc(e.text)}</div>`)
+      : (style.text_style || "hand_underline") === "paper_tag"
+      ? el(`<div class="fx-mark text tag" title="${esc(name(e, i))}" style="--line:${esc(style.underline_color || "#B8322A")};--rot:${e.angle || 0}deg">${esc(e.text)}<span class="fx-line"></span></div>`)
       : (style.text_style || "hand_underline") === "hand_underline"
         ? el(`<div class="fx-mark text hand" title="${esc(name(e, i))}" style="--ink:${esc(style.hand_color || "#262523")};--halo:${esc(style.hand_halo || "#F5F2EA")};--line:${esc(style.underline_color || "#C34D48")};--rot:${e.angle || 0}deg;font-family:'${esc(style.hand_font || "Itim")}', 'SF Itim', sans-serif">${esc(e.text.toUpperCase())}${style.underline === false ? "" : '<span class="fx-line"></span>'}</div>`)
         : el(`<div class="fx-mark text" title="${esc(name(e, i))}" style="color:${esc(style.text_color || "#fff")}">${esc(e.text)}</div>`);
@@ -874,10 +888,10 @@ async function openEffects(number, after) {
       markers[i].classList.toggle("sel", i === sel);
     });
     list.innerHTML = `<div class="label-up">Effects in this scene</div>` + fx.map((e, i) => `<button class="fx-item ${i === sel ? "on" : ""}" data-i="${i}">
-      <span class="fx-ic">${icon(e.type === "pin" ? "pin" : "type")}</span><span><b>${esc(name(e, i))}</b>
+      <span class="fx-ic">${icon(e.type === "pin" || e.type === "circle" ? "pin" : "type")}</span><span><b>${esc(name(e, i))}</b>
       <small>on the word "${esc(e.word)}"${e.t !== null && e.t !== undefined ? ` at ${fmtT(e.t)}` : " (sync first to see the time)"}${e.measured === false ? " ⚠ estimated" : ""}</small>
-      <small>${Math.round(e.x * 100)}% across, ${Math.round(e.y * 100)}% down${e.type === "text" && e.auto && !e.placed ? " · <b>auto-placed</b> (drag to move)" : ""}</small></span></button>`).join("") +
-      `<div class="help" style="margin-top:12px">Pins land with their <b>tip</b> on the spot you click. Text is centred on its spot.</div>`;
+      <small>${FIXED[e.type] ? `fixed spot: ${FIXED[e.type]}` : `${Math.round(e.x * 100)}% across, ${Math.round(e.y * 100)}% down${e.auto && !e.placed ? " · <b>auto-placed</b> (drag to move)" : ""}`}</small></span></button>`).join("") +
+      `<div class="help" style="margin-top:12px">Pins land with their <b>tip</b> on the spot you click. Text, stamps, sticky notes and marker circles are centred on their spot. Typewriter names and quote cards always sit in the same place on the screen.</div>`;
     fillIcons(list);
     $$(".fx-item", list).forEach((b) => (b.onclick = () => { sel = parseInt(b.dataset.i, 10); place(); }));
   };
@@ -896,7 +910,14 @@ async function openEffects(number, after) {
     const frameMin = Math.min(w * r.width, h * r.height);
     const hand = (style.text_style || "hand_underline") === "hand_underline";
     const px = (hand ? (style.hand_size || 150) : (style.text_size || 96)) / 1080 * frameMin;
-    markers.forEach((mk, i) => { if (fx[i].type === "text") mk.style.fontSize = Math.max(9, px) + "px"; });
+    const sizes = { stamp: (style.stamp_size || 96), note: (style.note_size || 56) * 0.75 };
+    const tag = (style.text_style || "hand_underline") === "paper_tag";
+    markers.forEach((mk, i) => {
+      const t = fx[i].type;
+      if (t === "text") mk.style.fontSize = Math.max(9, (tag ? (style.tag_size || 120) * 0.8 / 1080 * frameMin : px)) + "px";
+      else if (sizes[t]) mk.style.fontSize = Math.max(8, sizes[t] / 1080 * frameMin) + "px";
+      else if (t === "circle") { const d = 0.22 * w * r.width; mk.style.width = d + "px"; mk.style.height = (d * 0.72) + "px"; }
+    });
   };
   window.addEventListener("resize", visible);
   img.onload = visible;
@@ -1101,7 +1122,15 @@ function schema() {
       { k: "clip_volume", t: "range", l: "Clip audio volume", min: 0, max: 1, step: 0.01 },
       { k: "keep_audio", t: "toggle", l: "Keep clip audio (sound effects under the voice)", wide: 1 },
     ] },
-    { sec: "effects", title: "Scene effects ([PIN] and [TEXT])", icon: "pin", fields: [
+    { sec: "effects", title: "Scene effects ([PIN], [TEXT], [STAMP], [TYPE], [NOTE], [CIRCLE], [QUOTE])", icon: "pin", fields: [
+      { k: "finish", t: "toggle", l: "Film finish: paper texture, soft grain and vignette over the whole video", wide: 1 },
+      { k: "cut_whoosh", t: "toggle", l: "Very soft whoosh on every hard cut", wide: 1 },
+      { k: "builtin_sounds", t: "toggle", l: "Built-in sounds for pins and text (when you haven't uploaded your own)", wide: 1 },
+      { k: "tag_size", t: "range", l: "Paper tag text: size (px at 1080p)", min: 40, max: 220, step: 1 },
+      { k: "stamp_size", t: "range", l: "Stamp: size (px at 1080p)", min: 40, max: 200, step: 1 },
+      { k: "type_size", t: "range", l: "Typewriter name: size (px at 1080p)", min: 30, max: 120, step: 1 },
+      { k: "note_size", t: "range", l: "Sticky note: text size (px at 1080p)", min: 30, max: 120, step: 1 },
+      { k: "circle_color", t: "color", l: "Marker circle colour" },
       { k: "text_style", t: "one", l: "[TEXT] style", opts: (S.meta && S.meta.text_styles) || { hand_underline: "Hand-lettered + underline", classic: "Classic pop" }, wide: 1 },
       { k: "hand_font", t: "select", l: "Hand-lettered: font", opts: Object.fromEntries(fonts.map((f) => [f, f])) },
       { k: "hand_size", t: "range", l: "Hand-lettered: size (px at 1080p)", min: 40, max: 260, step: 1 },

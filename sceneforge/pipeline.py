@@ -56,6 +56,7 @@ def save_script(project: Project, text, expected=None):
         raise ValueError(warnings[0] if warnings else "No scenes found in the script.")
     (project.dir / "inputs").mkdir(exist_ok=True)
     (project.dir / "inputs" / "script.txt").write_text(text, encoding="utf-8")
+    project.data["opening"] = script_parser.parse_opening(text)
     project.set_script(text, scenes, int(expected) if expected else None)
     auto_match_media(project)
     return scenes, warnings
