@@ -201,8 +201,9 @@ on a torn cream paper tag with a red underline that draws itself (the Under The 
 the whole video, so it feels printed instead of digital. *Soft whoosh on every hard cut* and *Built-in sounds
 for pins and text* are there too.
 
-**The "Under The Logo" preset** has all of this switched on: paper-tag text, film finish, soft whooshes on
-hard cuts, built-in sounds, gentle camera moves and no captions. Pick it when you create the project.
+**The "Under The Logo" preset** has paper-tag text, film finish, built-in sounds, gentle camera moves and no
+captions switched on. Cuts between scenes are silent (only [CHAPTER] tears make a sound); turn on *Soft whoosh
+on every hard cut* if you want one. Pick it when you create the project.
 
 ## 5. How to name your media files
 

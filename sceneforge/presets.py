@@ -127,7 +127,7 @@ NEW_PRESETS = {
         "transitions": {"mode": "cut", "duration": 0.5},
         "captions": {"enabled": False},
         "audio": {"music_volume": 0.12, "duck": True, "sfx_volume": 0.5},
-        "effects": {"text_style": "paper_tag", "finish": True, "cut_whoosh": True, "builtin_sounds": True,
+        "effects": {"text_style": "paper_tag", "finish": True, "cut_whoosh": False, "builtin_sounds": True,
                     "pin_color": "#C43428", "pin_size": 80, "label_size": 40},
     }),
 }
